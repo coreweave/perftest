@@ -677,7 +677,7 @@ struct perftest_parameters {
 	uint16_t			cqe_poll;
 	int				use_cqe_poll;
 	int             report_min_bw;
-	int             report_min_bw_cycles;
+	uint64_t             report_min_bw_cycles;
 };
 
 struct report_options {
