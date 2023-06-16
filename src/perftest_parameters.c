@@ -1977,6 +1977,13 @@ static void force_dependecies(struct perftest_parameters *user_param)
 		exit(1);
 	}
 
+	if (user_param->report_min_bw > 0) {
+		if (user_param->tst != BW) {
+			printf(" Sample minimum bandwidth only supports BW tests.\n");
+			exit (1);
+		}
+	}
+	
 	user_param->fill_count = 0;
 	if (user_param->test_type == ITERATIONS) {
 		if (user_param->cq_mod >= user_param->tx_depth && user_param->iters % user_param->tx_depth) {
