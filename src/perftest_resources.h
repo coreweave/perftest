@@ -55,6 +55,9 @@
 #if defined(HAVE_MLX5DV)
 #include <infiniband/mlx5dv.h>
 #endif
+#if defined(HAVE_HNSDV)
+#include <infiniband/hnsdv.h>
+#endif
 #include <rdma/rdma_cma.h>
 #include <stdint.h>
 #if defined(__FreeBSD__)
@@ -77,6 +80,9 @@
 #define MAX_SEND_SGE		(1)
 #define MAX_RECV_SGE		(1)
 #define CTX_POLL_BATCH		(16)
+#define CTX_POLL_BATCH_INTENSE	(64)
+#define CQE_POLL_INTENSE_NUM_QPS_THRESHOLD		(2048)
+#define CQE_POLL_INTENSE_MSG_SIZE_THRESHOLD		(8192)
 #define PL			(1)
 #define ATOMIC_ADD_VALUE	(1)
 #define ATOMIC_SWAP_VALUE	(0)
@@ -175,6 +181,10 @@ struct pingpong_context {
 	struct ibv_comp_channel			*recv_channel;
 	struct ibv_comp_channel			*send_channel;
 	struct ibv_pd				*pd;
+	#ifdef HAVE_TD_API
+	struct ibv_td				*td;
+	#endif
+	struct ibv_pd				*pad;
 	struct ibv_mr				**mr;
 	struct ibv_mr				*null_mr;
 	struct ibv_cq				*send_cq;
@@ -206,7 +216,6 @@ struct pingpong_context {
 	int					tx_depth;
 	uint64_t				*scnt;
 	uint64_t				*ccnt;
-	int					is_contig_supported;
 	uint32_t				*r_dctn;
 	uint32_t				*dci_stream_id;
 	int 					dek_number;
@@ -259,6 +268,19 @@ int check_add_port(char **service,int port,
 				   const char *servername,
 				   struct addrinfo *hints,
 				   struct addrinfo **res);
+
+/* sockaddr_set_port
+ *
+ * Description : Initialize port for given sockaddr structure
+ *
+ * Parameters :
+ *	service - an empty char** to contain the service name.
+ *  port - The selected port on which the server will listen.
+ *  sin - sockaddr params for the connection.
+ *
+ * Return Value : SUCCESS, FAILURE.
+ */
+int sockaddr_set_port(struct sockaddr *sin,int port);
 
 /* ctx_find_dev
  *
@@ -504,7 +526,8 @@ void ctx_set_send_wqes(struct pingpong_context *ctx,
  *
  * Description :
  *
- *	Prepare the receives work request templates for all QPs in SEND receive test.
+ *	Prepare the receives work request templates for all QPs in SEND and
+ *	WRITE_IMM receive test.
  *
  * Parameters :
  *
@@ -633,6 +656,19 @@ int run_iter_bi(struct pingpong_context *ctx,struct perftest_parameters *user_pa
  *	user_param  - user_parameters struct for this test.
  */
 int run_iter_lat_write(struct pingpong_context *ctx,struct perftest_parameters *user_param);
+
+/* run_iter_lat_write_imm
+ *
+ * Description :
+ *
+ *  This is the latency test function for WRITE_IMM verb.
+ *
+ * Parameters :
+ *
+ *	ctx     - Test Context.
+ *	user_param  - user_parameters struct for this test.
+ */
+int run_iter_lat_write_imm(struct pingpong_context *ctx,struct perftest_parameters *user_param);
 
 /* run_iter_lat
  *
@@ -774,13 +810,13 @@ static __inline int ctx_notify_send_recv_events(struct pingpong_context *ctx)
 
 	if (FD_ISSET(ctx->recv_channel->fd, &rfds) &&
 	    ctx_notify_events(ctx->recv_channel)) {
-		fprintf(stderr,"Failed to notify receive events to CQ");
+		fprintf(stderr,"Failed to notify receive events to CQ\n");
 		return FAILURE;
 	}
 
 	if (FD_ISSET(ctx->send_channel->fd, &rfds) &&
 	    ctx_notify_events(ctx->send_channel)) {
-		fprintf(stderr,"Failed to notify send events to CQ");
+		fprintf(stderr,"Failed to notify send events to CQ\n");
 		return FAILURE;
 	}
 
@@ -984,5 +1020,7 @@ int rdma_cm_destroy_cma(struct pingpong_context *ctx,
 *
 */
 int error_handler(char *error_message);
+
+void check_bf_support(struct pingpong_context *ctx);
 
 #endif /* PERFTEST_RESOURCES_H */

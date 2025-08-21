@@ -195,6 +195,11 @@ SEND tests (ib_send_lat or ib_send_bw) flags:
   -g, --mcg=<num_of_qps> 		Send messages to multicast group with <num_of_qps> qps attached to it
   -M, --MGID=<multicast_gid>		In multicast, uses <multicast_gid> as the group MGID
 
+WRITE latency (ib_write_lat) flags:
+-----------------------------------
+
+  --write_with_imm				Use write-with-immediate verb instead of write
+
 ATOMIC tests (ib_atomic_lat or ib_atomic_bw) flags: 
 ---------------------------------------------------
 
@@ -239,8 +244,14 @@ Special feature detailed explanation in tests:
      "-M" flag allows you to choose the multicast group address.
 
   4. GPUDirect usage:
-     To utilize GPUDirect feature, perftest should be compiled as:
-     ./autogen.sh && ./configure CUDA_H_PATH=<path to cuda.h> && make -j, e.g.:
+     As of perftest release 25.07 the build system automatically
+     detects the location of cuda.h. Passing CUDA_H_PATH to the configure
+     script is therefore no longer required. The variable is still accepted
+     for backward-compatibility but its usage is not recommended.
+     The variable will depracted in the 25.10 release.
+
+     For perftest releases earlier than 25.07 you must still provide the path to
+     cuda.h explicitly during configuration, for example:
      ./autogen.sh && ./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h && make -j
 
      Thus --use_cuda=<gpu_index> flag will be available to add to a command line:
@@ -257,6 +268,16 @@ Special feature detailed explanation in tests:
             2- export LIBRARY_PATH.
               e.g: export LIBRARY_PATH=/usr/local/cuda/lib64:$LIBRARY_PATH
           perform compilation as decribe in the begining of section 4 (GPUDirect usage).
+
+    CUDA Runtime API support:
+      To use the --gpu_touch option in Perftest, you must build Perftest with support for the CUDA Runtime API (libcudart).
+      Run the configure script with the following flags:
+      ./configure --enable-cudart
+
+      For releases earlier than 25.07:
+      ./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h --enable-cudart
+
+      Note: Ensure that your NVIDIA CUDA Compiler (nvcc) version is compatible with your GCC version. Incompatibility between nvcc and gcc can cause build or runtime issues.
 
   5. AES_XTS (encryption/decryption)
      In perftest repository there are two files as follow:
@@ -362,3 +383,5 @@ Special feature detailed explanation in tests:
  8. If GPUDirect is not working, (e.g. you see "Couldn't allocate MR" error message), consider disabling Scatter to CQE feature. Set the environmental variable MLX5_SCATTER_TO_CQE=0. E.g.:
     MLX5_SCATTER_TO_CQE=0 ./ib_write_bw -d ib_dev --use_cuda=<gpu index> -a
 
+ 9. When using high number of qps (>2K) with message size larger than 8KB, BW may degrade. perftest will set the polling batch to 64.
+  In higher scales, consider using --cqe_poll to set the number of CQE's that polled every iteration to be higher than default value.

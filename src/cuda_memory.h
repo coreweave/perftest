@@ -16,6 +16,11 @@ bool cuda_memory_supported();
 
 bool cuda_memory_dmabuf_supported();
 
+bool data_direct_supported();
+
+bool cuda_gpu_touch_supported();
+
+
 struct memory_ctx *cuda_memory_create(struct perftest_parameters *params);
 
 
@@ -29,8 +34,16 @@ inline bool cuda_memory_dmabuf_supported() {
 	return false;
 }
 
+inline bool data_direct_supported() {
+	return false;
+}
+
 inline struct memory_ctx *cuda_memory_create(struct perftest_parameters *params) {
 	return NULL;
+}
+
+inline bool cuda_gpu_touch_supported() {
+	return false;
 }
 
 #endif

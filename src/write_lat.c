@@ -187,6 +187,7 @@ int main(int argc, char *argv[])
 
 	/* Print basic test information. */
 	ctx_print_test_info(&user_param);
+	check_bf_support(&ctx);
 
 	/* shaking hands and gather the other side info. */
 	if (ctx_hand_shake(&user_comm,my_dest,rem_dest)) {
@@ -260,9 +261,34 @@ int main(int argc, char *argv[])
 
 		for (i = 1; i < 24 ; ++i) {
 			user_param.size = (uint64_t)1 << i;
-			if(run_iter_lat_write(&ctx,&user_param)) {
-				fprintf(stderr,"Test exited with Error\n");
-				goto free_mem;
+
+			if (user_param.verb == WRITE_IMM) {
+				if (!user_param.use_unsolicited_write) {
+					/* Post receive recv_wqes fo current message size */
+					if (ctx_set_recv_wqes(&ctx,&user_param)) {
+						fprintf(stderr," Failed to post receive recv_wqes\n");
+						goto free_mem;
+					}
+				}
+
+				/* Sync between the client and server so the client won't send packets
+				 * Before the server has posted his receive wqes (in UC/UD it will result in a deadlock).
+				 */
+
+				if (ctx_hand_shake(&user_comm,&my_dest[0],&rem_dest[0])) {
+					fprintf(stderr,"Failed to exchange data between server and clients\n");
+					goto free_mem;
+				}
+
+				if(run_iter_lat_write_imm(&ctx,&user_param)) {
+					fprintf(stderr,"Test exited with Error\n");
+					goto free_mem;
+				}
+			} else {
+				if(run_iter_lat_write(&ctx,&user_param)) {
+					fprintf(stderr,"Test exited with Error\n");
+					goto free_mem;
+				}
 			}
 
 			user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
@@ -270,10 +296,33 @@ int main(int argc, char *argv[])
 
 	} else {
 
-		if(run_iter_lat_write(&ctx,&user_param)) {
-			fprintf(stderr,"Test exited with Error\n");
-			goto free_mem;
+		if (user_param.verb == WRITE_IMM) {
+			/* Post recevie recv_wqes fo current message size */
+			if (ctx_set_recv_wqes(&ctx,&user_param)) {
+				fprintf(stderr," Failed to post receive recv_wqes\n");
+				goto free_mem;
+			}
+
+			/* Sync between the client and server so the client won't send packets
+			* Before the server has posted his receive wqes (in UC/UD it will result in a deadlock).
+			*/
+
+			if (ctx_hand_shake(&user_comm,my_dest,rem_dest)) {
+				fprintf(stderr,"Failed to exchange data between server and clients\n");
+				goto free_mem;
+			}
+
+			if(run_iter_lat_write_imm(&ctx,&user_param)) {
+				fprintf(stderr,"Test exited with Error\n");
+				goto free_mem;
+			}
+		} else {
+			if(run_iter_lat_write(&ctx,&user_param)) {
+				fprintf(stderr,"Test exited with Error\n");
+				goto free_mem;
+			}
 		}
+
 		user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
 	}
 

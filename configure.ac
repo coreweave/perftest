@@ -29,7 +29,7 @@
 # SOFTWARE.
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([perftest],[6.15],[linux-rdma@vger.kernel.org])
+AC_INIT([perftest],[6.26],[linux-rdma@vger.kernel.org])
 AC_CONFIG_HEADERS([config.h])
 AC_CONFIG_AUX_DIR([config])
 AC_CONFIG_MACRO_DIR([m4])
@@ -39,7 +39,14 @@ m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AC_SUBST(MAJOR_VERSION)
 AC_SUBST(MINOR_VERSION)
 
+AC_ARG_VAR(HAVE_OPENCL, opencl support)
 AC_ARG_VAR(CUDA_H_PATH, help-string)
+AC_ARG_ENABLE([cudart],
+              [AS_HELP_STRING([--enable-cudart],
+                              [Enable CUDA runtime support])
+              ],
+              [],
+              [enable_cudart=no])
 AC_ARG_VAR(RANLIB, ranlib tool)
 
 AC_ARG_ENABLE([ibv_wr_api],
@@ -60,7 +67,6 @@ AC_PROG_LIBTOOL
 AC_PROG_RANLIB
 AC_HEADER_STDC
 AC_CHECK_HEADERS([infiniband/verbs.h],,[AC_MSG_ERROR([ibverbs header files not found])])
-AC_CHECK_HEADERS([sys/random.h],,)
 AC_CHECK_LIB([ibverbs], [ibv_get_device_list], [], [AC_MSG_ERROR([libibverbs not found])])
 AC_CHECK_LIB([rdmacm], [rdma_create_event_channel], [], AC_MSG_ERROR([librdmacm-devel not found]))
 AC_CHECK_LIB([ibumad], [umad_init], [LIBUMAD=-libumad], AC_MSG_ERROR([libibumad not found]))
@@ -166,6 +172,30 @@ fi
 
 AC_TRY_LINK([
 #include <infiniband/mlx5dv.h>],
+	[int x = MLX5DV_CONTEXT_FLAGS_BLUEFLAME;],[HAVE_MLX5DV_BF_FLAG=yes], [HAVE_MLX5DV_BF_FLAG=no])
+AM_CONDITIONAL([HAVE_MLX5DV_BF_FLAG],[test "x$HAVE_MLX5DV_BF_FLAG" = "xyes"])
+if [test $HAVE_MLX5DV_BF_FLAG = yes] && [test $HAVE_MLX5DV = yes]; then
+	AC_DEFINE([HAVE_MLX5DV_BF_FLAG], [1], [Have BF indication support])
+fi
+
+AC_TRY_LINK([
+#include <infiniband/mlx5dv.h>],
+	[int x = MLX5DV_CONTEXT_MASK_OOO_RECV_WRS;],[HAVE_OOO_RECV_WRS=yes], [HAVE_OOO_RECV_WRS=no])
+AM_CONDITIONAL([HAVE_OOO_RECV_WRS],[test "x$HAVE_OOO_RECV_WRS" = "xyes"])
+if [test $HAVE_OOO_RECV_WRS = yes] && [test $HAVE_MLX5DV = yes]; then
+	AC_DEFINE([HAVE_OOO_RECV_WRS], [1], [Have DDP support])
+fi
+
+AC_TRY_LINK([
+#include <infiniband/mlx5dv.h>],
+	[int x = MLX5DV_REG_DMABUF_ACCESS_DATA_DIRECT;],[HAVE_DATA_DIRECT=yes], [HAVE_DATA_DIRECT=no])
+AM_CONDITIONAL([HAVE_DATA_DIRECT],[test "x$HAVE_DATA_DIRECT" = "xyes"])
+if [test $HAVE_DATA_DIRECT = yes] && [test $HAVE_MLX5DV = yes]; then
+	AC_DEFINE([HAVE_DATA_DIRECT], [1], [Have Data Direct support])
+fi
+
+AC_TRY_LINK([
+#include <infiniband/mlx5dv.h>],
         [int x = MLX5DV_CRYPTO_STANDARD_AES_XTS;],[HAVE_AES_XTS=yes], [HAVE_AES_XTS=no])
 AM_CONDITIONAL([HAVE_AES_XTS],[test "x$HAVE_AES_XTS" = "xyes"])
 if [test $HAVE_AES_XTS = yes] && [test $HAVE_MLX5DV = yes];  then
@@ -232,26 +262,47 @@ AC_ARG_ENABLE([rocm],
               [],
               [enable_rocm=no])
 
+AC_ARG_ENABLE([rocm_dmabuf],
+              [AS_HELP_STRING([--enable-rocm-dmabuf],
+                              [Enable ROCm DMABUF feature])
+              ],
+              [],
+              [enable_rocm_dmabuf=no])
+
 AC_ARG_WITH([rocm],
             [AS_HELP_STRING([--with-rocm=@<:@ROCm installation path@:>@],
                             [Provide path to ROCm installation])
             ],
             [AS_CASE([$with_rocm],
                      [yes|no], [],
-                     [CPPFLAGS="-I$with_rocm/include $CPPFLAGS"
-                      LDFLAGS="-L$with_rocm/lib64 -Wl,-rpath=$with_rocm/lib64 -L$with_rocm/lib -Wl,-rpath=$with_rocm/lib -lamdhip64 $LDFLAGS"])
+                     [CPPFLAGS="-I$with_rocm/include -I$with_rocm/include/hsa $CPPFLAGS"
+                      LDFLAGS="-L$with_rocm/lib64 -Wl,-rpath=$with_rocm/lib64 -L$with_rocm/lib -Wl,-rpath=$with_rocm/lib -lamdhip64 -lhsa-runtime64 $LDFLAGS"])
             ])
 
 AS_IF([test "x$enable_rocm" = xyes], [
-       AC_DEFINE([__HIP_PLATFORM_HCC__], [1], [Enable ROCm])
+       AC_DEFINE([__HIP_PLATFORM_AMD__], [1], [Enable ROCm])
        AC_CHECK_HEADERS([hip/hip_runtime_api.h], [],
                         [AC_MSG_ERROR([cannot include hip/hip_runtime_api.h])])
+       AC_CHECK_HEADERS([hip/hip_version.h], [],
+                        [AC_MSG_ERROR([cannot include hip_version.h])])
        AC_SEARCH_LIBS([hipFree], [amdhip64], [],
                       [AC_MSG_ERROR([cannot link with -lamdhip64])])
        AC_DEFINE([HAVE_ROCM], [1], [Enable ROCm])
        ])
 
 AM_CONDITIONAL([ROCM], [test x$enable_rocm = xyes])
+
+AS_IF([test "x$enable_rocm_dmabuf" = xyes], [
+       AS_IF([test "x$HAVE_REG_DMABUF_MR" = "xno"],
+             [AC_MSG_ERROR([rdma-core doesn't support dmabuf mr registration])])
+       AS_IF([test "x$enable_rocm" = "xno"],
+             [AC_MSG_ERROR([rocm not enabled/supported])])
+       AC_CHECK_HEADERS([hsa/hsa_ext_amd.h], [],
+                        [AC_MSG_ERROR([cannot include hsa/hsa_ext_amd.h])])
+       AC_SEARCH_LIBS([hsa_amd_portable_export_dmabuf], [hsa-runtime64], [],
+                      [AC_MSG_ERROR([cannot link with -lhsa-runtime64])])
+       AC_DEFINE([HAVE_ROCM_DMABUF], [1], [Enable ROCm DMABUF feature])
+	   ])
 
 AC_TRY_LINK([
 #include <infiniband/verbs.h>],
@@ -261,22 +312,87 @@ if [test $HAVE_EX_ODP = yes] && [test $HAVE_EX = yes]; then
         AC_DEFINE([HAVE_EX_ODP], [1], [Have Extended  ODP support])
 fi
 
-if [test "$CUDA_H_PATH" ]; then
+AC_CHECK_LIB([dl], [dlclose],
+    [AC_MSG_RESULT([libdl found])
+     LIBS="$LIBS -ldl"],
+    [AC_MSG_ERROR([libdl not found. You need to install libdl for dynamic loading support])])
+
+
+# Check for CUDA header file in common location
+AC_MSG_CHECKING([for CUDA header file])
+cuda_found=no
+cuda_h_path=""
+
+if test -f "/usr/local/cuda/include/cuda.h"; then
+	cuda_h_path="/usr/local/cuda/include/cuda.h"
+	cuda_found=yes
+	AC_MSG_RESULT([found at $cuda_h_path])
+fi
+
+# User defined cuda header path
+if test -f "$CUDA_H_PATH"; then
+       cuda_h_path="$CUDA_H_PATH"
+       cuda_found=yes
+       AC_MSG_RESULT([found at $cuda_h_path])
+fi
+
+if test "$cuda_found" = "yes"; then
 	AC_DEFINE([HAVE_CUDA], [1], [Enable CUDA feature])
-	AC_DEFINE_UNQUOTED([CUDA_PATH], "$CUDA_H_PATH" , [Enable CUDA feature])
-	LIBS=$LIBS" -lcuda"
+	AC_DEFINE_UNQUOTED([CUDA_PATH], "$cuda_h_path" , [Enable CUDA feature])
 	AC_CHECK_LIB([cuda], [cuMemGetHandleForAddressRange], [HAVE_CUDA_CUMEMGETHANDLEFORADDRESSRANGE=yes], [HAVE_CUDA_CUMEMGETHANDLEFORADDRESSRANGE=no])
+	cuda_toolkit_version=`grep "define CUDA_VERSION" $cuda_h_path | cut -d' ' -f3`
+	AC_DEFINE_UNQUOTED([CUDA_VER], [$cuda_toolkit_version], [Define CUDA_VER])
 	AC_TRY_LINK([
-	#include <$CUDA_H_PATH>],
+	#include <$cuda_h_path>],
 	[int x = CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD|CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED;],
 	[CUDA_DMA_BUF_PARAMETERS_SUPPORT=yes], [CUDA_DMA_BUF_PARAMETERS_SUPPORT=no])
 	if [test "x$HAVE_REG_DMABUF_MR" = "xyes"] && [test "x$HAVE_CUDA_CUMEMGETHANDLEFORADDRESSRANGE" = "xyes"] && [test "x$CUDA_DMA_BUF_PARAMETERS_SUPPORT" = "xyes"]; then
+		HAVE_CUDA_DMABUF=yes
 		AC_DEFINE([HAVE_CUDA_DMABUF], [1], [Enable CUDA DMABUF feature])
+	fi
+	AC_TRY_LINK([
+	#include <$cuda_h_path>],
+	[int x = CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE;],
+	[CUDA_DMA_BUF_MAPPING_TYPE_PCIE_SUPPORT=yes], [CUDA_DMA_BUF_MAPPING_TYPE_PCIE_SUPPORT=no])
+	if [test "x$CUDA_DMA_BUF_MAPPING_TYPE_PCIE_SUPPORT" = "xyes"] && [test "x$HAVE_REG_DMABUF_MR" = "xyes"]; then
+		AC_DEFINE([HAVE_DMABUF_MAPPING_TYPE_PCIE], [1], [Enable CUDA DMABUF handle mapping via PCIe BAR1])
+	fi
+
+	if [test "x$enable_cudart" = "xyes"]; then
+		AC_DEFINE([HAVE_CUDART], [1], [Enable CUDART features])
+		LIBS=$LIBS" -lcudart -lstdc++"
+		CPPFLAGS="-I$(dirname $cuda_h_path)/include $CPPFLAGS"
+		LDFLAGS="-L$(dirname $(dirname $cuda_h_path))/lib -L$(dirname $(dirname $cuda_h_path))/lib64 $LDFLAGS"
+
+		if [test "x${gpu_arch}" != "x"]; then
+			NVCCFLAGS="${NVCCFLAGS} -arch compute_${gpu_arch} -code compute_${gpu_arch},sm_${gpu_arch}"
+			AC_MSG_NOTICE([Setting GPU_ARCH = ${gpu_arch}])
+		fi
+		NVCCFLAGS="${NVCCFLAGS} -Xcompiler -fpermissive"
+		AC_CHECK_DECLS([CUDA_VERSION], [HAVE_CUDA_VERSION=yes], [HAVE_CUDA_VERSION=no], [[#include "$cuda_h_path"]])
+		if [test "x$HAVE_CUDA_VERSION" = "xyes"]; then
+			AS_VERSION_COMPARE([$cuda_toolkit_version], [11070], [HAVE_CUDA_DIAGSUPPRESS=no], [HAVE_CUDA_DIAGSUPPRESS=yes], [HAVE_CUDA_DIAGSUPPRESS=yes])
+			if [test "x$HAVE_CUDA_DIAGSUPPRESS" = "xyes"]; then
+				NVCCFLAGS="${NVCCFLAGS} -Xcompiler -fpermissive -diag-suppress 2464 -diag-suppress 815"
+			else
+				NVCCFLAGS="${NVCCFLAGS} -Xcompiler -fpermissive"
+			fi
+		fi
+
+		CUDA_TOOLKIT_PATH=$(dirname $(dirname $cuda_h_path))
+		AC_DEFINE_UNQUOTED([CUDA_TOOLKIT_PATH], "$CUDA_TOOLKIT_PATH", [Path to the CUDA Toolkit])
+		AC_SUBST([NVCCFLAGS], ["${NVCCFLAGS}"])
+		AC_SUBST([NVCC], ["$CUDA_TOOLKIT_PATH/bin/nvcc"])
+
+		AC_CHECK_LIB([cudart], [cudaMalloc], [], [AC_MSG_ERROR([libcudart not found])])
 	fi
 fi
 AM_CONDITIONAL([CUDA_DMA_BUF_PARAMETERS_SUPPORT],[test "x$CUDA_DMA_BUF_PARAMETERS_SUPPORT" = "xyes"])
+AM_CONDITIONAL([CUDA_DMA_BUF_MAPPING_TYPE_PCIE_SUPPORT],[test "x$CUDA_DMA_BUF_MAPPING_TYPE_PCIE_SUPPORT" = "xyes"])
 
-AM_CONDITIONAL([CUDA], [test "$CUDA_H_PATH"])
+AM_CONDITIONAL([CUDA], [test "$cuda_h_path"])
+AM_CONDITIONAL([HAVE_CUDA], [test "$cuda_h_path"])
+AM_CONDITIONAL([HAVE_CUDART], [test "x$enable_cudart" = "xyes"])
 
 AC_ARG_ENABLE([neuron],
               [AS_HELP_STRING([--enable-neuron],
@@ -301,6 +417,9 @@ AS_IF([test "x$enable_neuron" = xyes], [
                         [AC_MSG_ERROR([could not find nrt.h in include path])])
        AC_SEARCH_LIBS([nrt_tensor_allocate], [nrt], [],
                       [AC_MSG_ERROR([could not find library, nrt])])
+       AC_SEARCH_LIBS([nrt_get_dmabuf_fd], [nrt],
+       		      [AC_DEFINE([HAVE_NEURON_DMABUF], [1], [Enable Neuron DMA buffers])],
+		      [])
        ])
 
 AM_CONDITIONAL([NEURON], [test x$enable_neuron = xyes])
@@ -318,7 +437,7 @@ AC_ARG_WITH([hl],
 	],
 	[AS_CASE([$with_hl],
 		[yes|no], [],
-		[CPPFLAGS="-I$with_hl/include/habanalabs $CPPFLAGS"
+		[CPPFLAGS="-I$with_hl/include/habanalabs -I/usr/include/drm -I/usr/include/libdrm $CPPFLAGS"
 		LDFLAGS="-L$with_hl/lib/habanalabs -Wl,-rpath=$with_hl/lib/habanalabs $LDFLAGS"])
 	])
 
@@ -335,6 +454,36 @@ AS_IF([test "x$enable_hl" = xyes], [
 	])
 
 AM_CONDITIONAL([HABANALABS], [test x$enable_hl = xyes])
+
+AC_ARG_ENABLE([mlu],
+              [AS_HELP_STRING([--enable-mlu],
+                              [Enable MLU benchmarks])
+              ],
+              [],
+              [enable_mlu=no])
+
+AC_ARG_WITH([mlu],
+            [AS_HELP_STRING([--with-mlu=@<:@MLU installation path@:>@],
+                            [Provide path to MLU installation])
+            ],
+            [AS_CASE([$with_mlu],
+                     [yes|no], [],
+                     [CPPFLAGS="-I$with_mlu/include $CPPFLAGS"
+                      LDFLAGS="-L$with_mlu/lib64 -Wl,-rpath=$with_mlu/lib64 -lcndrv $LDFLAGS"])
+            ])
+
+AS_IF([test "x$enable_mlu" = xyes], [
+       AC_DEFINE([HAVE_MLU], [1], [Enable MLU benchmarks])
+       AC_CHECK_HEADERS([cn_api.h], [],
+                        [AC_MSG_ERROR([could not find cn_api.h in include path])])
+       AC_SEARCH_LIBS([cnMalloc], [cndrv], [],
+                      [AC_MSG_ERROR([could not find library, cndrv])])
+       AC_SEARCH_LIBS([cnMemGetHandleForAddressRange], [cndrv],
+					  [AC_DEFINE([HAVE_MLU_DMABUF], [1], [Enable MLU DMA buffers])],
+		      [])
+       ])
+
+AM_CONDITIONAL([MLU], [test x$enable_mlu = xyes])
 
 AC_TRY_LINK([#include <infiniband/verbs.h>],
 	[struct ibv_qp_attr *attr; int x = attr->rate_limit;],[HAVE_PACKET_PACING=yes], [HAVE_PACKET_PACING=no])
@@ -362,6 +511,11 @@ if [test $HAVE_IBV_WR_API = yes]; then
 	if [test $HAVE_RDMA_WRITE_SRD = yes]; then
 		AC_DEFINE([HAVE_SRD_WITH_RDMA_WRITE], [1], [Have SRD with RDMA write support])
 	fi
+	AC_TRY_LINK([#include <infiniband/efadv.h>],
+		    [int x = EFADV_DEVICE_ATTR_CAPS_UNSOLICITED_WRITE_RECV;], [HAVE_UNSOLICITED_WRITE_RECV_SRD=yes], [HAVE_UNSOLICITED_WRITE_RECV_SRD=no])
+	if [test $HAVE_UNSOLICITED_WRITE_RECV_SRD = yes]; then
+		AC_DEFINE([HAVE_SRD_WITH_UNSOLICITED_WRITE_RECV], [1], [Have SRD with unsolicited RDMA write with imm. support])
+	fi
 else
 	AC_CHECK_LIB([efa], [efadv_create_driver_qp], [HAVE_SRD=yes], [HAVE_SRD=no])
 fi
@@ -378,10 +532,38 @@ if [test $HAVE_MLX5DV_LIB = yes] && [test $HAVE_MLX5DV = yes]; then
 	AC_SUBST([LIBMLX5])
 fi
 
+AC_CHECK_LIB([hns], [hnsdv_query_device], [HAVE_HNSDV=yes LIBHNS=-lhns], [HAVE_HNSDV=no])
+AM_CONDITIONAL([HAVE_HNSDV], [test "x$HAVE_HNSDV" = "xyes"])
+if [test $HAVE_HNSDV = yes]; then
+	AC_DEFINE([HAVE_HNSDV], [1], [Have hns Direct Verbs support])
+	AC_SUBST([LIBHNS])
+fi
+
+AC_TRY_LINK([#include <infiniband/verbs.h>],
+	[ibv_cq_ex_to_cq], [HAVE_CQ_EX=yes], [HAVE_CQ_EX=no])
+AM_CONDITIONAL([HAVE_CQ_EX], [test "x$HAVE_CQ_EX" = "xyes"])
+if [test $HAVE_CQ_EX = yes]; then
+	AC_DEFINE([HAVE_CQ_EX], [1], [Have CQ EX API support])
+fi
+
+AC_TRY_LINK([#include <infiniband/verbs.h>],
+	[ibv_alloc_td], [HAVE_TD_API=yes], [HAVE_TD_API=no])
+AM_CONDITIONAL([HAVE_TD_API], [test "x$HAVE_TD_API" = "xyes"])
+if [test $HAVE_TD_API = yes]; then
+	AC_DEFINE([HAVE_TD_API], [1], [Have TD API support])
+fi
+
 CFLAGS="-g -Wall -D_GNU_SOURCE -O3 $CFLAGS"
 LDFLAGS="$LDFLAGS"
 LIBS=$LIBS" -lpthread"
+AM_CONDITIONAL([OPENCL], [test "$HAVE_OPENCL"])
+if [test $HAVE_OPENCL = yes]; then
+	AC_DEFINE([HAVE_OPENCL], [1], [Enable OPENCL feature])
+	AC_CHECK_LIB([OpenCL], [clGetDeviceIDs], [], [AC_MSG_ERROR([libOpenCL not found])])
+fi
+
 AC_SUBST([LIBUMAD])
 AC_SUBST([LIBMATH])
 AC_CONFIG_FILES([Makefile])
+AC_CONFIG_COMMANDS([man], [${MKDIR_P} man])
 AC_OUTPUT

@@ -1,18 +1,15 @@
 .TH perftest 1
-.SH NAME:
+.SH NAME
+ib_write_bw, ib_read_bw, ib_send_bw, ib_atomic_bw,
+ib_write_lat, ib_read_lat, ib_send_lat, ib_atomic_lat,
+raw_ethernet_bw, raw_ethernet_lat, raw_ethernet_burst_lat,
+raw_ethernet_fs_rate \- benchmarks for various types of infinabnd performance
+.SH DESCRIPTION
 .TP
-        ib_write_bw, ib_read_bw, ib_send_bw, ib_atomic_bw
- ib_write_lat, ib_read_lat, ib_send_lat, ib_atomic_lat
- raw_ethernet_bw, raw_ethernet_lat, raw_ethernet_burst_lat
- raw_ethernet_fs_rate
-.SH DESCRIPTION:
-.SH
-.TP
-.B Perftest:
-This is a set of benchmarks that measures different metrics & verbs performance which include
+Perftest is a package that includes various benchmarks that measures
+different metrics & verbs performance which include
 many different options and modes.
-.SS RUNNING TESTS:
-.SS
+.SS RUNNING TESTS
 .TP
 .B Server:
  ./<test name> <options>
@@ -29,14 +26,13 @@ many different options and modes.
     Server: ./ib_read_lat -s 32 -n 5000
     Client: ./ib_read_lat -s 32 -n 5000 192.168.0.1
 
-.SS IMPORTANT NOTES:
+.SS IMPORTANT NOTES
 .TP
         1- The options that specific to modes in perftest must be the same for both server and client.
  2- Perftest applications may need to be ran with sudo when running from non root.
  3- Perftest applications usually installed to the /usr/bin/.
  4- Perftest may print some failures with syndroms to the stderr, perftest get those errors from rdma-core.
-.SH OPTIONS:
-.SH
+.SH OPTIONS
 .TP
 .B -h, --help
  Lists the available options to the screen.
@@ -194,6 +190,9 @@ many different options and modes.
  Generate Cqe only after <--cq-mod> completion.
  Relevant only for bandwidth.
 .TP
+.B --cqe_poll
+ Number of CQEs polled per iteration
+.TP
 .B -r, --rx-depth=<dep>
  Rx queue size (default 512), if using srq, rx-depth controls max-wr size of the srq.
  Relevant only for send non fsRate.
@@ -268,8 +267,13 @@ many different options and modes.
  Use IPv6 GID. Default is IPv4.
  Not relevant for RawEth.
 .TP
-.B --source_ip
+.B --ipv6-addr
+ Use IPv6 address for parameters negotiation. Default is IPv4.
+ Not relevant for RawEth.
+.TP
+.B --bind_source_ip
  Source IP of the interface used for connection establishment. By default taken from routing table.
+ --ipv6-addr flag must be used when specifying an IPv6 source IP
  Not relevant for RawEth.
 .TP
 .B --latency_gap=<delay_time>
@@ -298,7 +302,7 @@ many different options and modes.
  bw (bandwidth / message_rate), latency (latency).
 .TP
 .B --payload_file_path=<payload_txt_file_path>
- Set the payload by passing a txt file containing a pattern in the next form(little endian): '0xaaaaaaaa, 0xbbbbbbbb, ...
+ Set the payload by passing a txt file containing a pattern in the next form(little endian): '0xaaaaaaaa,0xbbbbbbbb,...
  Not relevant for RawEth and Write latency.
 .TP
 .B --use_old_post_send
@@ -345,7 +349,7 @@ many different options and modes.
  Not relevant for raw_ethernet_fs_rate.
 .TP
 .B --use-null-mr
- Allocate a null memory region for the client with \fBibv_alloc_null_mr\fR(3)
+ Allocate a null memory region with \fBibv_alloc_null_mr\fR(3)
 .TP
 .B --use_cuda=<cuda device id>
  Use CUDA specific device for GPUDirect RDMA testing.
@@ -357,15 +361,58 @@ many different options and modes.
  Not relevant for raw_ethernet_fs_rate.
  System support required.
 .TP
+.B --cuda_mem_type=<value>
+ Set CUDA memory type <value>=0(device,default),1(managed),4(malloc)
+ Not relevant for raw_ethernet_fs_rate.
+ System support required.
+.TP
 .B --use_cuda_dmabuf
  Use CUDA DMA-BUF for GPUDirect RDMA testing.
  Not relevant for raw_ethernet_fs_rate.
+ System support required.
+.TP
+.B --use_hl=<hl device id>
+ Use HabanaLabs specific device for HW accelerator direct RDMA testing.
+ System support required.
+.TP
+.B --use_neuron=<logical neuron core id>
+ Use Neuron specific device for HW accelerator direct RDMA testing.
+ System support required.
+.TP
+.B --use_neuron_dmabuf
+ Use Neuron DMA-BUF for HW accelerator direct RDMA testing.
  System support required.
 .TP
 .B --use_rocm=<rocm device id>
  Use selected ROCm device for GPUDirect RDMA testing.
  Not relevant for raw_ethernet_fs_rate.
  System support required.
+.TP
+.B --use_rocm_dmabuf
+ Use ROCm DMA-BUF for GPUDirect RDMA testing.
+ Not relevant for raw_ethernet_fs_rate.
+ System support required.
+.TP
+.B --use_mlu=<mlu device id>
+ Use MLU specific device for HW accelerator direct RDMA testing.
+ System support required.
+.TP
+.B --use_mlu_dmabuf
+ Use MLU DMA-BUF for HW accelerator direct RDMA testing.
+ System support required.
+.TP
+.B --use_opencl=<opencl device id>
+ Use OpenCl specific device for GPUDirect RDMA testing
+ Not relevant for raw_ethernet_fs_rate.
+ System support required.
+.TP
+.B  --opencl_platform_id=<opencl platform id>
+ Use OpenCl specific platform ID
+ System support required.
+.TP
+.B --gpu_touch=<once\\infinte>
+ Set GPU touch mode to test memory accesses during the testing process.
+ Relevant only for CUDA and OpenCL memory types
 .TP
 .B --use_hugepages
  Use Hugepages instead of contig, memalign allocations.
@@ -403,8 +450,11 @@ many different options and modes.
 .B --use_ooo
  Use out of order data placement.
  System support required.
-.SS RawEth only options:
-.SS
+.TP
+.B --write_with_imm
+ Use write-with-immediate verb instead of write.
+ Write tests only.
+.SS RawEth only options
 .TP
 .B -B, --source_mac
  Source MAC address by this format XX:XX:XX:XX:XX:XX **MUST** be entered.
@@ -470,7 +520,7 @@ many different options and modes.
  Not relevant for raw_ethernet_fs_rate.
  System support required.
 .TP
-.B --flow_label
+.B --flow_label=<fl0,fl1,...>
  IPv6 flow label.
  Not relevant for raw_ethernet_fs_rate.
 .TP
@@ -483,8 +533,7 @@ many different options and modes.
 .TP
 .B --raw_mcast.
  Relevant only for bandwidth.
-.SH AUTHORS:
-.SH
+.SH AUTHORS
 .TP
 .B  Hassan Khadour <hkhadour@nvidia.com>
 .TP

@@ -112,7 +112,7 @@ static int send_set_up_connection(struct pingpong_context *ctx,
 
 		for (i=0; i < user_param->num_of_qps; i++) {
 			if (ibv_attach_mcast(ctx->qp[i],&mcg_params->mgid,mcg_params->mlid)) {
-				fprintf(stderr, "Couldn't attach QP to MultiCast group");
+				fprintf(stderr, "Couldn't attach QP to MultiCast group\n");
 				return FAILURE;
 			}
 		}
@@ -299,6 +299,7 @@ int main(int argc, char *argv[])
 
 	/* Print basic test information. */
 	ctx_print_test_info(&user_param);
+	check_bf_support(&ctx);
 
 	for (i=0; i < user_param.num_of_qps; i++) {
 
