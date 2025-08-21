@@ -604,6 +604,7 @@ static void usage(const char *argv0, VerbType verb, TestType tst, int connection
 		printf("      --run_infinitely ");
 		printf(" Run test forever, print results every <duration> seconds (SYMMETRIC)\n");
 
+
 		printf("      --report-min-bw=<sample iterations>\n");
 		printf(" Sample minimum bandwidth over X iterations\n");
 	}
@@ -4127,6 +4128,7 @@ void print_report_bw (struct perftest_parameters *user_param, struct bw_report_d
 	} else {
 		my_bw_rep->bw_min = 0;
 	}
+
 	if (!user_param->duplex || ((user_param->verb == SEND || user_param->verb == WRITE_IMM) && user_param->test_type == DURATION)
 			|| user_param->test_method == RUN_INFINITELY || user_param->connection_type == RawEth)
 		print_full_bw_report(user_param, my_bw_rep, NULL);
@@ -4250,6 +4252,7 @@ static void write_test_info_to_file(int out_json_fds, struct perftest_parameters
 	if (user_param->report_min_bw) {
 		dprintf(out_json_fds, "report_min_bw: %d\n",user_param->report_min_bw);
 	}
+
 	dprintf(out_json_fds, "\n},\n");
 }
 

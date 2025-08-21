@@ -195,6 +195,9 @@
 
 #define RESULT_FMT		" #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]       BW min[MB/sec]"
 
+
+#define RESULT_FMT		" #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]       BW min[MB/sec]"
+
 #define RESULT_FMT_PER_PORT	" #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]   BW Port1[MiB/sec]   MsgRate Port1[Mpps]   BW Port2[MiB/sec]   MsgRate Port2[Mpps]"
 
 #define RESULT_FMT_G	" #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]        BW min[Gb/sec]"
