@@ -38,6 +38,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>     /* FMT-1267: wall-clock budget for the agent OOB connect retry */
+#include <unistd.h>   /* usleep */
 
 #include "perftest_parameters.h"
 #include "perftest_resources.h"
@@ -79,14 +81,22 @@ static int reestablish_qp(struct pingpong_context *ctx,
 		user_comm->rdma_params->sockfd = -1;
 	}
 	{
-		/* FMT-1267: agent client may dial before the server reaches listen()
-		 * (ready is signalled earlier) -- retry the OOB connect on the client
-		 * rather than failing on a transient ECONNREFUSED. */
-		int _oob_tries = (user_param->machine == CLIENT) ? 200 : 1;
-		int _oob_t, _oob_ok = 0;
-		for (_oob_t = 0; _oob_t < _oob_tries; _oob_t++) {
-			if (!establish_connection(user_comm)) { _oob_ok = 1; break; }
-			usleep(25000);
+		/* FMT-1267: ready is signalled BEFORE the server reaches listen(), and
+		 * under heavy duplexed load (e.g. VR200: 32 agents tearing down/recreating
+		 * QPs + CUDA at once) the server can take many seconds to bind. Retry the
+		 * client OOB connect against a wall-clock budget rather than a flat count
+		 * so a slow-but-alive server is tolerated instead of connect-refused ->
+		 * fail. Each refused localhost connect returns immediately (~25ms/try via
+		 * the sleep). The server tries once -- it is the listener, not the dialer. */
+		int _oob_ok = 0;
+		if (user_param->machine == CLIENT) {
+			time_t _oob_deadline = time(NULL) + 30; /* ~30s; < scheduler collect_timeout */
+			do {
+				if (!establish_connection(user_comm)) { _oob_ok = 1; break; }
+				usleep(25000);
+			} while (time(NULL) < _oob_deadline);
+		} else {
+			_oob_ok = !establish_connection(user_comm);
 		}
 		if (!_oob_ok)
 			return FAILURE;
@@ -176,7 +186,14 @@ static void agent_repl(struct pingpong_context *ctx, struct perftest_parameters 
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"ready\",\"id\":%ld}\n", jid);
 		if (run_one_job(ctx, user_param, user_comm, my_dest, rem_dest, my_bw_rep, rem_bw_rep)) {
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"%s\",\"status\":\"failed\",\"fault\":{\"reason\":\"qp_setup_failed\"}}\n", jid, role);
-			break;
+			/* FMT-1267 server-survival invariant: a job-level failure (peer died
+			 * and never connected, or a transient QP/OOB error) must NOT tear
+			 * down the agent. Report it and keep serving the next job --
+			 * run_one_job -> reestablish_qp front-loads per-job teardown (QP
+			 * destroy, CQ drain, socket close) so the next job recovers. Exiting
+			 * here is what caused the VR200 cascade: one failure killed a healthy
+			 * agent, whose peer then connect-refused and also exited. */
+			continue;
 		}
 		if (user_param->machine == CLIENT)
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"client\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",

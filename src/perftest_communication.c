@@ -13,6 +13,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <poll.h>      /* FMT-1267: bounded agent-mode server accept */
 #include <netdb.h>
 #include "perftest_communication.h"
 #include "host_memory.h"
@@ -873,6 +874,23 @@ static int ethernet_server_connect(struct perftest_comm *comm)
 	}
 
 	listen(sockfd, 1);
+	/* FMT-1267: in agent mode, bound the wait for a client so a peer that died
+	 * (e.g. after exhausting its own OOB retries) can't hang this server agent
+	 * forever. Poll the listen socket, then fail the job if no client arrives --
+	 * the agent stays alive (server-survival) and serves the next job. The budget
+	 * exceeds the client's ~30s connect budget so a slow-but-alive client still
+	 * lands. Stock (non-agent) mode blocks in accept() exactly as before. */
+	if (getenv("PERFTEST_AGENT")) {
+		struct pollfd _pfd; int _pr;
+		_pfd.fd = sockfd; _pfd.events = POLLIN; _pfd.revents = 0;
+		_pr = poll(&_pfd, 1, 35000);
+		if (_pr <= 0) {
+			fprintf(stderr, "agent: no client connected within 35s on port %d\n",
+				comm->rdma_params->port);
+			close(sockfd);
+			return 1;
+		}
+	}
 	connfd = accept(sockfd, NULL, 0);
 
 	if (connfd < 0) {
