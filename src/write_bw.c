@@ -45,6 +45,148 @@
 
 /******************************************************************************
  ******************************************************************************/
+/* run_job (FMT-1267): tear down + recreate the QP and re-establish the
+ * connection between in-process jobs, keeping the warm device/PD/MR/CQ/CUDA
+ * (ibv_reg_mr is NOT called again). Mirrors the initial connect sequence in
+ * main(); plain RC path only (no DC/XRC/event special-casing for the spike). */
+static int g_agent_fd = 3;
+
+static int reestablish_qp(struct pingpong_context *ctx,
+			  struct perftest_parameters *user_param,
+			  struct perftest_comm *user_comm,
+			  struct pingpong_dest *my_dest,
+			  struct pingpong_dest *rem_dest)
+{
+	int i;
+	struct ibv_wc wc;
+	for (i = 0; i < user_param->num_of_qps; i++) {
+		if (ctx->qp[i] && ibv_destroy_qp(ctx->qp[i])) {
+			fprintf(stderr, "reestablish: ibv_destroy_qp %d failed\n", i);
+			return FAILURE;
+		}
+		ctx->qp[i] = NULL;
+	}
+	while (ibv_poll_cq(ctx->send_cq, 1, &wc) > 0) {}
+	if (ctx->recv_cq)
+		while (ibv_poll_cq(ctx->recv_cq, 1, &wc) > 0) {}
+	if (ctx->scnt)
+		memset(ctx->scnt, 0, sizeof(uint64_t) * user_param->num_of_qps);
+	if (ctx->ccnt)
+		memset(ctx->ccnt, 0, sizeof(uint64_t) * user_param->num_of_qps);
+	user_comm->rdma_params->port = user_param->port;
+	if (user_comm->rdma_params->sockfd >= 0) {
+		close(user_comm->rdma_params->sockfd);
+		user_comm->rdma_params->sockfd = -1;
+	}
+	{
+		/* FMT-1267: agent client may dial before the server reaches listen()
+		 * (ready is signalled earlier) -- retry the OOB connect on the client
+		 * rather than failing on a transient ECONNREFUSED. */
+		int _oob_tries = (user_param->machine == CLIENT) ? 200 : 1;
+		int _oob_t, _oob_ok = 0;
+		for (_oob_t = 0; _oob_t < _oob_tries; _oob_t++) {
+			if (!establish_connection(user_comm)) { _oob_ok = 1; break; }
+			usleep(25000);
+		}
+		if (!_oob_ok)
+			return FAILURE;
+	}
+	if (check_mtu(ctx->context, user_param, user_comm))
+		return FAILURE;
+	for (i = 0; i < user_param->num_of_qps; i++) {
+		if (create_qp_main(ctx, user_param, i)) {
+			fprintf(stderr, "reestablish: create_qp_main %d failed\n", i);
+			return FAILURE;
+		}
+		if (user_param->work_rdma_cm == OFF)
+			modify_qp_to_init(ctx, user_param, i);
+	}
+	if (set_up_connection(ctx, user_param, my_dest))
+		return FAILURE;
+	for (i = 0; i < user_param->num_of_qps; i++)
+		if (ctx_hand_shake(user_comm, &my_dest[i], &rem_dest[i]))
+			return FAILURE;
+	if (user_param->work_rdma_cm == OFF)
+		if (ctx_connect(ctx, rem_dest, user_param, my_dest))
+			return FAILURE;
+	user_comm->rdma_params->side = REMOTE;
+	for (i = 0; i < user_param->num_of_qps; i++)
+		if (ctx_hand_shake(user_comm, &my_dest[i], &rem_dest[i]))
+			return FAILURE;
+	if (ctx_hand_shake(user_comm, &my_dest[0], &rem_dest[0]))
+		return FAILURE;
+	return SUCCESS;
+}
+
+static int run_one_job(struct pingpong_context *ctx, struct perftest_parameters *user_param,
+		       struct perftest_comm *user_comm, struct pingpong_dest *my_dest,
+		       struct pingpong_dest *rem_dest, struct bw_report_data *my_bw_rep,
+		       struct bw_report_data *rem_bw_rep)
+{
+	if (reestablish_qp(ctx, user_param, user_comm, my_dest, rem_dest))
+		return FAILURE;
+	if (user_param->machine == CLIENT || user_param->duplex)
+		ctx_set_send_wqes(ctx, user_param, rem_dest);
+	if (user_param->duplex)
+		if (ctx_hand_shake(user_comm, &my_dest[0], &rem_dest[0]))
+			return FAILURE;
+	if (user_param->machine == CLIENT || user_param->duplex) {
+		if (run_iter_bw(ctx, user_param))
+			return FAILURE;
+		print_report_bw(user_param, my_bw_rep);
+	}
+	/* non-duplex WRITE: client measured, server was a passive target; both now
+	 * sync (client signals done / server waits) and exchange the report. */
+	if (!user_param->duplex)
+		if (ctx_hand_shake(user_comm, &my_dest[0], &rem_dest[0]))
+			return FAILURE;
+	xchg_bw_reports(user_comm, my_bw_rep, rem_bw_rep, atof(user_param->rem_version));
+	if (user_comm->rdma_params->sockfd >= 0) {
+		close(user_comm->rdma_params->sockfd);
+		user_comm->rdma_params->sockfd = -1;
+	}
+	return SUCCESS;
+}
+
+/* agent_repl (FMT-1267): role-pure REPL. Warm device/PD/MR/CQ/CUDA + OOB socket
+ * are already up; per stdin job, run_one_job recreates the QP (warm MR reused)
+ * and runs the fixed role, emitting a result on fd 3 (client = measurement,
+ * server = bare ack). "shutdown" -> bye. */
+static void agent_repl(struct pingpong_context *ctx, struct perftest_parameters *user_param,
+		       struct perftest_comm *user_comm, struct pingpong_dest *my_dest,
+		       struct pingpong_dest *rem_dest, struct bw_report_data *my_bw_rep,
+		       struct bw_report_data *rem_bw_rep)
+{
+	char line[4096];
+	const char *role = (user_param->machine == CLIENT) ? "client" : "server";
+	while (fgets(line, sizeof(line), stdin)) {
+		char *q, *sq;
+		long jid;
+		if (strstr(line, "\"type\":\"shutdown\""))
+			break;
+		if (!strstr(line, "\"type\":\"job\""))
+			continue;
+		q = strstr(line, "\"id\":");
+		jid = q ? atol(q + 5) : 0;
+		sq = strstr(line, "\"size\":");
+		if (sq)
+			user_param->size = (unsigned long)atol(sq + 7);
+		{ char *pq = strstr(line, "\"port\":"); if (pq) user_param->port = atoi(pq + 7); }
+		if (user_param->machine == SERVER)
+			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"ready\",\"id\":%ld}\n", jid);
+		if (run_one_job(ctx, user_param, user_comm, my_dest, rem_dest, my_bw_rep, rem_bw_rep)) {
+			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"%s\",\"status\":\"failed\",\"fault\":{\"reason\":\"qp_setup_failed\"}}\n", jid, role);
+			break;
+		}
+		if (user_param->machine == CLIENT)
+			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"client\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",
+				jid, (unsigned long)my_bw_rep->size, my_bw_rep->bw_peak, my_bw_rep->bw_avg, my_bw_rep->bw_min, my_bw_rep->msgRate_avg);
+		else
+			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"server\",\"status\":\"ok\"}\n", jid);
+	}
+	dprintf(g_agent_fd, "{\"v\":1,\"type\":\"bye\"}\n");
+}
+
 int main(int argc, char *argv[])
 {
 	int				ret_parser, i = 0, rc;
@@ -55,6 +197,14 @@ int main(int argc, char *argv[])
 	struct perftest_comm		user_comm;
 	struct bw_report_data		my_bw_rep, rem_bw_rep;
 	int rdma_cm_flow_destroyed = 0;
+
+	/* FMT-1267: in agent mode, line-buffer stdout and unbuffer stderr so a
+	 * hung (still-alive) agent's diagnostics reach the captured logfile for
+	 * triage instead of sitting in a block buffer until exit. */
+	if (getenv("PERFTEST_AGENT")) {
+		setvbuf(stdout, NULL, _IOLBF, 0);
+		setvbuf(stderr, NULL, _IONBF, 0);
+	}
 
 	/* init default values to user's parameters */
 	memset(&user_param,0,sizeof(struct perftest_parameters));
@@ -123,6 +273,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Initialize the connection and print the local data. */
+	if (!getenv("PERFTEST_AGENT")) {
 	if (establish_connection(&user_comm)) {
 		fprintf(stderr," Unable to init the socket connection\n");
 		dealloc_comm_struct(&user_comm,&user_param);
@@ -139,6 +290,7 @@ int main(int argc, char *argv[])
 		dealloc_comm_struct(&user_comm,&user_param);
 		goto free_devname;
 	}
+	}
 
 	MAIN_ALLOC(my_dest , struct pingpong_dest , user_param.num_of_qps , free_rdma_params);
 	memset(my_dest, 0, sizeof(struct pingpong_dest)*user_param.num_of_qps);
@@ -152,10 +304,12 @@ int main(int argc, char *argv[])
 	}
 
 	/* Negotiate parameters. */
+	if (!getenv("PERFTEST_AGENT")) {
 	if (negotiate_params(&ctx, &user_comm, &user_param)) {
 		fprintf(stderr, " Failed to negotiate parameters\n");
 		dealloc_ctx(&ctx, &user_param);
 		goto free_mem;
+	}
 	}
 
 	/* Create RDMA CM resources and connect through CM. */
@@ -175,6 +329,15 @@ int main(int argc, char *argv[])
 			dealloc_ctx(&ctx, &user_param);
 			goto free_mem;
 		}
+	}
+
+	if (getenv("PERFTEST_AGENT")) {
+		g_agent_fd = getenv("AGENT_CONTROL_OUT_FD") ? atoi(getenv("AGENT_CONTROL_OUT_FD")) : 3;
+		dprintf(g_agent_fd, "{\"v\":1,\"type\":\"hello\",\"device\":\"%s\",\"verb\":\"write_bw\",\"gdr_capable\":true,\"pid\":%d}\n",
+			user_param.ib_devname ? user_param.ib_devname : "", (int)getpid());
+		user_comm.rdma_params->sockfd = -1;
+		agent_repl(&ctx, &user_param, &user_comm, my_dest, rem_dest, &my_bw_rep, &rem_bw_rep);
+		goto destroy_context;
 	}
 
 	/* Initialize data validation for receiver side */
@@ -483,6 +646,47 @@ int main(int argc, char *argv[])
 		}
 
 		print_report_bw(&user_param,&my_bw_rep);
+
+		if (getenv("PERFTEST_AGENT")) {
+			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":0,\"role\":\"%s\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",
+				user_param.machine == CLIENT ? "client" : "server",
+				(unsigned long)my_bw_rep.size, my_bw_rep.bw_peak, my_bw_rep.bw_avg, my_bw_rep.bw_min, my_bw_rep.msgRate_avg);
+		}
+
+		/* run_job stdin REPL (FMT-1267): in PERFTEST_AGENT mode, read JSON job
+		 * lines from stdin and run each on a fresh QP reusing warm MR/PD/CQ/CUDA
+		 * (run_one_job), emitting a result on fd 3; "shutdown" -> bye. Outside
+		 * agent mode, keep the PERFTEST_SPIKE_RERUNS self-test loop. */
+		if (getenv("PERFTEST_AGENT")) {
+			char line[4096];
+			while (fgets(line, sizeof(line), stdin)) {
+				char *q;
+				long jid;
+				if (strstr(line, "\"type\":\"shutdown\""))
+					break;
+				if (!strstr(line, "\"type\":\"job\""))
+					continue;
+				q = strstr(line, "\"id\":");
+				jid = q ? atol(q + 5) : 0;
+				{ char *sq = strstr(line, "\"size\":"); if (sq) user_param.size = (unsigned long)atol(sq + 7); }
+				if (run_one_job(&ctx, &user_param, &user_comm, my_dest, rem_dest, &my_bw_rep, &rem_bw_rep)) {
+					dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"%s\",\"status\":\"failed\",\"fault\":{\"reason\":\"qp_setup_failed\"}}\n",
+						jid, user_param.machine == CLIENT ? "client" : "server");
+					goto destroy_context;
+				}
+				dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"%s\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",
+					jid, user_param.machine == CLIENT ? "client" : "server",
+					(unsigned long)my_bw_rep.size, my_bw_rep.bw_peak, my_bw_rep.bw_avg, my_bw_rep.bw_min, my_bw_rep.msgRate_avg);
+			}
+			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"bye\"}\n");
+		} else {
+			const char *rj_env = getenv("PERFTEST_SPIKE_RERUNS");
+			int rj_reruns = rj_env ? atoi(rj_env) : 1;
+			int rj_i;
+			for (rj_i = 1; rj_i < rj_reruns; rj_i++)
+				if (run_one_job(&ctx, &user_param, &user_comm, my_dest, rem_dest, &my_bw_rep, &rem_bw_rep))
+					goto destroy_context;
+		}
 
 		if (user_param.duplex && (user_param.verb != WRITE_IMM || user_param.test_type != DURATION)) {
 			xchg_bw_reports(&user_comm, &my_bw_rep,&rem_bw_rep,atof(user_param.rem_version));
