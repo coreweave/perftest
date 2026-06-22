@@ -1,0 +1,64 @@
+name: tag-upstream-master
+
+# Mint an immutable, gamble-pinnable tag on every update to upstream_master --
+# the fork's canonical "forked-master" line (upstream perftest + Layer-A
+# report-min-bw + Layer-B PERFTEST_AGENT persistent backend). A compile-verify
+# GATES the tag, so a commit that doesn't build is never tagged or shipped.
+#
+# gamble pins the SPECIFIC tag this produces (Dockerfile PERFTEST_VERSION_HASH)
+# and bumps it per perftest change. Because the pin string changes, the bump is
+# the natural Docker/GHCR cache-bust AND the coupling point for any output-format
+# change (its network.py parse change lands in the same commit). This replaces
+# the old MOVING tag, which broke cache invalidation + reproducibility.
+# See FMT-1267 / FMT-1286.
+
+on:
+  push:
+    branches: [upstream_master]
+  workflow_dispatch: {}
+
+# UPSTREAM_BASE = the upstream release upstream_master currently tracks. Bump it
+# ONLY when re-pulling a new upstream release into upstream_master (the rare,
+# deliberate maintenance event).
+env:
+  UPSTREAM_BASE: v26.04
+
+concurrency:
+  group: tag-upstream-master
+  cancel-in-progress: false
+
+permissions:
+  contents: write   # push tags
+
+jobs:
+  verify-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # full tag list needed for the per-day counter
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential autoconf automake libtool pkg-config \
+            libibverbs-dev librdmacm-dev libibumad-dev libpci-dev
+
+      - name: Compile-verify (amd64; CUDA is dynamically loaded, no dev pkg needed)
+        run: ./autogen.sh && ./configure && make -j"$(nproc)"
+
+      - name: Compute immutable tag
+        id: tag
+        run: |
+          DATE=$(date -u +%Y.%m.%d)
+          N=$(( $(git tag -l "cw-perftest-${UPSTREAM_BASE}-${DATE}.*" | wc -l) + 1 ))
+          echo "tag=cw-perftest-${UPSTREAM_BASE}-${DATE}.${N}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag + push
+        run: |
+          T="${{ steps.tag.outputs.tag }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$T" -m "perftest ${UPSTREAM_BASE} fork @ ${GITHUB_SHA} (compile-verified, gamble-pinnable)"
+          git push origin "$T"
+          echo "Minted **$T** @ \`${GITHUB_SHA}\`" >> "$GITHUB_STEP_SUMMARY"
