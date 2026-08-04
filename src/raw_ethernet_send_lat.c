@@ -225,7 +225,7 @@ int main(int argc, char *argv[])
 	/* print report (like print_report_bw) in the correct format
 	 * (as set before: FMT_LAT or FMT_LAT_DUR)
 	 */
-	user_param.test_type == ITERATIONS ? print_report_lat(&user_param) :
+	user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) :
 		print_report_lat_duration(&user_param);
 
 	/* destroy promisc flow */

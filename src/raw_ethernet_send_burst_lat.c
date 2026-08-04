@@ -231,7 +231,7 @@ int main(int argc, char *argv[])
 	 * (as set before: FMT_LAT or FMT_LAT_DUR)
 	 */
 	if (user_param.machine == CLIENT)
-		print_report_lat(&user_param);
+		print_report_lat(&user_param, 0);
 
 	/* destroy promisc flow */
 	if (user_param.use_promiscuous) {

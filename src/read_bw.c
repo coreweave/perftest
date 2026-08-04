@@ -223,6 +223,10 @@ int main(int argc, char *argv[])
 		goto destroy_context;
 	}
 
+	if (user_param.print_qp_setup_times) {
+		print_qp_setup_times(&user_param);
+	}
+
 	if (user_param.output == FULL_VERBOSITY) {
 		if (user_param.report_per_port) {
 			printf(RESULT_LINE_PER_PORT);
@@ -244,7 +248,12 @@ int main(int argc, char *argv[])
 		}
 
 		xchg_bw_reports(&user_comm, &my_bw_rep,&rem_bw_rep,atof(user_param.rem_version));
-		print_full_bw_report(&user_param, &rem_bw_rep, NULL);
+
+		if (user_param.test_method != RUN_INFINITELY) {
+			print_full_bw_report(&user_param, &rem_bw_rep, NULL);
+		} else {
+			printf(" Client closed connection\n");
+		}
 
 		if (ctx_close_connection(&user_comm,&my_dest[0],&rem_dest[0])) {
 			fprintf(stderr,"Failed to close connection between server and client\n");

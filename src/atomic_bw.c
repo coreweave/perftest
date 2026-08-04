@@ -227,6 +227,10 @@ int main(int argc, char *argv[])
 		goto destroy_context;
 	}
 
+	if (user_param.print_qp_setup_times) {
+		print_qp_setup_times(&user_param);
+	}
+
 	/* For half duplex tests, server just waits for client to exit */
 	if (user_param.machine == SERVER && !user_param.duplex) {
 		if (user_param.output == FULL_VERBOSITY) {

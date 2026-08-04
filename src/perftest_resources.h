@@ -55,6 +55,9 @@
 #if defined(HAVE_MLX5DV)
 #include <infiniband/mlx5dv.h>
 #endif
+#if defined(HAVE_HNSDV)
+#include <infiniband/hnsdv.h>
+#endif
 #include <rdma/rdma_cma.h>
 #include <stdint.h>
 #if defined(__FreeBSD__)
@@ -77,6 +80,9 @@
 #define MAX_SEND_SGE		(1)
 #define MAX_RECV_SGE		(1)
 #define CTX_POLL_BATCH		(16)
+#define CTX_POLL_BATCH_INTENSE	(64)
+#define CQE_POLL_INTENSE_NUM_QPS_THRESHOLD		(2048)
+#define CQE_POLL_INTENSE_MSG_SIZE_THRESHOLD		(8192)
 #define PL			(1)
 #define ATOMIC_ADD_VALUE	(1)
 #define ATOMIC_SWAP_VALUE	(0)
@@ -162,6 +168,50 @@ struct cma {
 	int disconnects_left;
 };
 
+struct pingpong_dest {
+	int 				lid;
+	int 				out_reads;
+	int 				qpn;
+	int 				psn;
+	unsigned			rkey;
+	unsigned long long		vaddr;
+	union ibv_gid			gid;
+	unsigned			srqn;
+	int				gid_index;
+};
+
+#ifdef HAVE_MRC
+struct mrc_fc_dest {
+	uint64_t vaddr;
+	uint32_t rkey;
+	uint64_t initial_credit;
+};
+
+struct mrc_fc_qp_state {
+	uint64_t credit;
+	uint64_t src;
+	uint64_t advertised;
+	uint64_t last_sent;
+	int outstanding;
+	struct ibv_sge sge;
+	struct ibv_send_wr wr;
+	struct mrc_fc_dest my_dest;
+	struct mrc_fc_dest rem_dest;
+};
+
+struct mrc_fc_context {
+	int enabled;
+	uint64_t credit_step;
+	int total_outstanding;
+	struct ibv_mr *credit_mr;
+	struct mrc_cq *send_cq;
+	struct mrc_qp *qp;
+	struct pingpong_dest qp_my_dest;
+	struct pingpong_dest qp_rem_dest;
+	struct mrc_fc_qp_state *qp_state;
+};
+#endif
+
 struct pingpong_context {
 	struct cma cma_master;
 	struct rdma_event_channel		*cm_channel;
@@ -175,6 +225,10 @@ struct pingpong_context {
 	struct ibv_comp_channel			*recv_channel;
 	struct ibv_comp_channel			*send_channel;
 	struct ibv_pd				*pd;
+	#ifdef HAVE_TD_API
+	struct ibv_td				*td;
+	struct ibv_pd				*pad;
+	#endif
 	struct ibv_mr				**mr;
 	struct ibv_mr				*null_mr;
 	struct ibv_cq				*send_cq;
@@ -206,7 +260,6 @@ struct pingpong_context {
 	int					tx_depth;
 	uint64_t				*scnt;
 	uint64_t				*ccnt;
-	int					is_contig_supported;
 	uint32_t				*r_dctn;
 	uint32_t				*dci_stream_id;
 	int 					dek_number;
@@ -225,19 +278,19 @@ struct pingpong_context {
 	int 					fd;
 	#endif
 	struct memory_ctx			*memory;
+	#ifdef HAVE_MRC
+	struct mrc_context *mrc_ctx;
+	struct mrc_qp **mrc_work_qp;
+	struct mrc_qp_hint *mrc_qp_hint;
+	struct mrc_cq *mrc_send_cq;
+	struct mrc_cq *mrc_recv_cq;
+	struct mrc_fc_context mrc_fc;
+	#ifdef HAVE_MRC_EXT_CQ
+	struct nv_mrc_cq_ex *mrc_send_cq_ext;
+	struct nv_mrc_cq_ex *mrc_recv_cq_ext;
+	#endif
+	#endif
 };
-
- struct pingpong_dest {
-	int 				lid;
-	int 				out_reads;
-	int 				qpn;
-	int 				psn;
-	unsigned			rkey;
-	unsigned long long		vaddr;
-	union ibv_gid			gid;
-	unsigned			srqn;
-	int				gid_index;
- };
 
 /******************************************************************************
  * Perftest resources Methods and interface utilitizes.
@@ -259,6 +312,19 @@ int check_add_port(char **service,int port,
 				   const char *servername,
 				   struct addrinfo *hints,
 				   struct addrinfo **res);
+
+/* sockaddr_set_port
+ *
+ * Description : Initialize port for given sockaddr structure
+ *
+ * Parameters :
+ *	service - an empty char** to contain the service name.
+ *  port - The selected port on which the server will listen.
+ *  sin - sockaddr params for the connection.
+ *
+ * Return Value : SUCCESS, FAILURE.
+ */
+int sockaddr_set_port(struct sockaddr *sin,int port);
 
 /* ctx_find_dev
  *
@@ -442,7 +508,7 @@ struct ibv_qp* ctx_qp_create(struct pingpong_context *ctx,
  * Return Value : SUCCESS, FAILURE.
  *
  */
-int ctx_modify_qp_to_init(struct ibv_qp *qp,struct perftest_parameters *user_param, int qp_index);
+int ctx_modify_qp_to_init(struct pingpong_context *ctx, struct perftest_parameters *user_param, int qp_index);
 
 /* ctx_connect.
  *
@@ -504,7 +570,8 @@ void ctx_set_send_wqes(struct pingpong_context *ctx,
  *
  * Description :
  *
- *	Prepare the receives work request templates for all QPs in SEND receive test.
+ *	Prepare the receives work request templates for all QPs in SEND and
+ *	WRITE_IMM receive test.
  *
  * Parameters :
  *
@@ -551,6 +618,21 @@ int ctx_alloc_credit(struct pingpong_context *ctx,
 int ctx_set_credit_wqes(struct pingpong_context *ctx,
 				struct perftest_parameters *user_param,
 				struct pingpong_dest *rem_dest);
+
+#ifdef HAVE_MRC
+int mrc_fc_init(struct pingpong_context *ctx,
+				struct perftest_parameters *user_param);
+void mrc_fc_set_local_control_qp(struct pingpong_context *ctx,
+				struct perftest_parameters *user_param,
+				struct pingpong_dest *my_dest);
+int mrc_fc_activate_control_qp(struct pingpong_context *ctx,
+				struct perftest_parameters *user_param);
+void mrc_fc_reset_state(struct pingpong_context *ctx,
+				struct perftest_parameters *user_param);
+int mrc_fc_drain_credit_completions(struct pingpong_context *ctx,
+				struct perftest_parameters *user_param);
+#endif
+
 /* run_iter_bw.
  *
  * Description :
@@ -621,6 +703,31 @@ int run_iter_bw_server(struct pingpong_context *ctx, struct perftest_parameters 
  */
 int run_iter_bi(struct pingpong_context *ctx,struct perftest_parameters *user_param);
 
+/* run_warmup_iter_lat_write
+ *
+ * Description :
+ *
+ *  This is the warm up function for LAT tests.
+ *
+ * Parameters :
+ *
+ *	ctx     - Test Context.
+ *	user_param  - user_parameters struct for this test.
+ */
+int run_warmup_iter_lat_write(struct pingpong_context *ctx,struct perftest_parameters *user_param);
+/* run_warmup_iter_lat_write_imm
+ *
+ * Description :
+ *
+ *  This is the warm up function for WRITE_IMM LAT tests.
+ *
+ * Parameters :
+ *
+ *	ctx     - Test Context.
+ *	user_param  - user_parameters struct for this test.
+ */
+int run_warmup_iter_lat_write_imm(struct pingpong_context *ctx,struct perftest_parameters *user_param);
+
 /* run_iter_lat_write
  *
  * Description :
@@ -633,6 +740,19 @@ int run_iter_bi(struct pingpong_context *ctx,struct perftest_parameters *user_pa
  *	user_param  - user_parameters struct for this test.
  */
 int run_iter_lat_write(struct pingpong_context *ctx,struct perftest_parameters *user_param);
+
+/* run_iter_lat_write_imm
+ *
+ * Description :
+ *
+ *  This is the latency test function for WRITE_IMM verb.
+ *
+ * Parameters :
+ *
+ *	ctx     - Test Context.
+ *	user_param  - user_parameters struct for this test.
+ */
+int run_iter_lat_write_imm(struct pingpong_context *ctx,struct perftest_parameters *user_param);
 
 /* run_iter_lat
  *
@@ -774,13 +894,13 @@ static __inline int ctx_notify_send_recv_events(struct pingpong_context *ctx)
 
 	if (FD_ISSET(ctx->recv_channel->fd, &rfds) &&
 	    ctx_notify_events(ctx->recv_channel)) {
-		fprintf(stderr,"Failed to notify receive events to CQ");
+		fprintf(stderr,"Failed to notify receive events to CQ\n");
 		return FAILURE;
 	}
 
 	if (FD_ISSET(ctx->send_channel->fd, &rfds) &&
 	    ctx_notify_events(ctx->send_channel)) {
-		fprintf(stderr,"Failed to notify send events to CQ");
+		fprintf(stderr,"Failed to notify send events to CQ\n");
 		return FAILURE;
 	}
 

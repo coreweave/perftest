@@ -288,6 +288,10 @@ int main(int argc, char *argv[])
 
 	}
 
+	if (user_param.print_qp_setup_times) {
+		print_qp_setup_times(&user_param);
+	}
+
 	ctx_set_send_wqes(&ctx,&user_param,rem_dest);
 
 	if (user_param.output == FULL_VERBOSITY) {
@@ -301,7 +305,7 @@ int main(int argc, char *argv[])
 		goto free_mem;
 	}
 
-	user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+	user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 
 	if (ctx_close_connection(&user_comm,my_dest,rem_dest)) {
 		fprintf(stderr,"Failed to close connection between server and client\n");

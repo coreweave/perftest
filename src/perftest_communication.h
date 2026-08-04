@@ -293,6 +293,12 @@ int ctx_xchg_data( struct perftest_comm *comm,
 		void *my_data,
 		void *rem_data,int size);
 
+#ifdef HAVE_MRC
+int mrc_fc_exchange(struct pingpong_context *ctx,
+		struct perftest_parameters *user_param,
+		struct perftest_comm *user_comm);
+#endif
+
 /* ethernet_write_data .
  *
  * Description :

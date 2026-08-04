@@ -248,7 +248,49 @@ int main(int argc, char *argv[])
 		goto destroy_context;
 	}
 
+	if (user_param.perform_warm_up) {
+		if (user_param.test_method == RUN_ALL) {
+			fprintf(stderr, "Warm up not supported for RUN_ALL test method.\n");
+			fprintf(stderr, "Skipping\n");
+			goto test_start;
+		}
+
+		ctx_set_send_wqes(&ctx,&user_param,rem_dest);
+        if (user_param.verb == WRITE_IMM) {
+			if (ctx_set_recv_wqes(&ctx,&user_param)) {
+				fprintf(stderr," Failed to post receive recv_wqes\n");
+				goto free_mem;
+			}
+
+			if (ctx_hand_shake(&user_comm,&my_dest[0],&rem_dest[0])) {
+				fprintf(stderr,"Failed to exchange data between server and clients\n");
+				goto free_mem;
+			}
+			if (run_warmup_iter_lat_write_imm(&ctx,&user_param)) {
+				fprintf(stderr, "Problems with warm up\n");
+				goto free_mem;
+			}
+		} else {
+			if (run_warmup_iter_lat_write(&ctx,&user_param)) {
+				fprintf(stderr, "Problems with warm up\n");
+				goto free_mem;
+			}
+		}
+
+		printf(RESULT_LINE);
+		printf("%s",(user_param.test_type == ITERATIONS) ? RESULT_FMT_LAT : RESULT_FMT_LAT_DUR);
+		printf((user_param.cpu_util_data.enable ? RESULT_EXT_CPU_UTIL : RESULT_EXT));
+		print_report_lat(&user_param, 1);
+		printf(RESULT_LINE);
+		printf("Warm up for %d iterations completed\n", user_param.warm_up_iters);
+	}
+
+test_start:
 	ctx_set_send_wqes(&ctx,&user_param,rem_dest);
+
+	if (user_param.print_qp_setup_times) {
+		print_qp_setup_times(&user_param);
+	}
 
 	if (user_param.output == FULL_VERBOSITY) {
 		printf(RESULT_LINE);
@@ -260,21 +302,69 @@ int main(int argc, char *argv[])
 
 		for (i = 1; i < 24 ; ++i) {
 			user_param.size = (uint64_t)1 << i;
-			if(run_iter_lat_write(&ctx,&user_param)) {
-				fprintf(stderr,"Test exited with Error\n");
-				goto free_mem;
+
+			if (user_param.verb == WRITE_IMM) {
+				if (!user_param.use_unsolicited_write) {
+					/* Post receive recv_wqes fo current message size */
+					if (ctx_set_recv_wqes(&ctx,&user_param)) {
+						fprintf(stderr," Failed to post receive recv_wqes\n");
+						goto free_mem;
+					}
+				}
+
+				/* Sync between the client and server so the client won't send packets
+				 * Before the server has posted his receive wqes (in UC/UD it will result in a deadlock).
+				 */
+
+				if (ctx_hand_shake(&user_comm,&my_dest[0],&rem_dest[0])) {
+					fprintf(stderr,"Failed to exchange data between server and clients\n");
+					goto free_mem;
+				}
+
+				if(run_iter_lat_write_imm(&ctx,&user_param)) {
+					fprintf(stderr,"Test exited with Error\n");
+					goto free_mem;
+				}
+			} else {
+				if(run_iter_lat_write(&ctx,&user_param)) {
+					fprintf(stderr,"Test exited with Error\n");
+					goto free_mem;
+				}
 			}
 
-			user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+			user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 		}
 
 	} else {
 
-		if(run_iter_lat_write(&ctx,&user_param)) {
-			fprintf(stderr,"Test exited with Error\n");
-			goto free_mem;
+		if (user_param.verb == WRITE_IMM) {
+			/* Post recevie recv_wqes fo current message size */
+			if (ctx_set_recv_wqes(&ctx,&user_param)) {
+				fprintf(stderr," Failed to post receive recv_wqes\n");
+				goto free_mem;
+			}
+
+			/* Sync between the client and server so the client won't send packets
+			* Before the server has posted his receive wqes (in UC/UD it will result in a deadlock).
+			*/
+
+			if (ctx_hand_shake(&user_comm,my_dest,rem_dest)) {
+				fprintf(stderr,"Failed to exchange data between server and clients\n");
+				goto free_mem;
+			}
+
+			if(run_iter_lat_write_imm(&ctx,&user_param)) {
+				fprintf(stderr,"Test exited with Error\n");
+				goto free_mem;
+			}
+		} else {
+			if(run_iter_lat_write(&ctx,&user_param)) {
+				fprintf(stderr,"Test exited with Error\n");
+				goto free_mem;
+			}
 		}
-		user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+
+		user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 	}
 
 	if (user_param.output == FULL_VERBOSITY) {

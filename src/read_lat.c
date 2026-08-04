@@ -290,6 +290,10 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (user_param.print_qp_setup_times) {
+		print_qp_setup_times(&user_param);
+	}
+
 	if (user_param.output == FULL_VERBOSITY) {
 		printf(RESULT_LINE);
 		printf("%s",(user_param.test_type == ITERATIONS) ? RESULT_FMT_LAT : RESULT_FMT_LAT_DUR);
@@ -306,7 +310,7 @@ int main(int argc, char *argv[])
 				goto free_mem;
 			}
 
-			user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+			user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 		}
 	} else {
 		if(run_iter_lat(&ctx,&user_param)){
@@ -314,7 +318,7 @@ int main(int argc, char *argv[])
 			goto free_mem;
 		}
 
-		user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+		user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 	}
 
 	if (ctx_close_connection(&user_comm,my_dest,rem_dest)) {

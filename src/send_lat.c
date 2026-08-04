@@ -112,7 +112,7 @@ static int send_set_up_connection(struct pingpong_context *ctx,
 
 		for (i=0; i < user_param->num_of_qps; i++) {
 			if (ibv_attach_mcast(ctx->qp[i],&mcg_params->mgid,mcg_params->mlid)) {
-				fprintf(stderr, "Couldn't attach QP to MultiCast group");
+				fprintf(stderr, "Couldn't attach QP to MultiCast group\n");
 				return FAILURE;
 			}
 		}
@@ -394,6 +394,11 @@ int main(int argc, char *argv[])
 			goto destroy_ctx;
 		}
 	}
+
+	if (user_param.print_qp_setup_times) {
+		print_qp_setup_times(&user_param);
+	}
+
 	if (user_param.output == FULL_VERBOSITY) {
 		printf(RESULT_LINE);
 		printf("%s",(user_param.test_type == ITERATIONS) ? RESULT_FMT_LAT : RESULT_FMT_LAT_DUR);
@@ -432,7 +437,7 @@ int main(int argc, char *argv[])
 				goto free_mem;
 			}
 
-			user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+			user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 		}
 
 	} else {
@@ -457,7 +462,7 @@ int main(int argc, char *argv[])
 			goto free_mem;
 		}
 
-		user_param.test_type == ITERATIONS ? print_report_lat(&user_param) : print_report_lat_duration(&user_param);
+		user_param.test_type == ITERATIONS ? print_report_lat(&user_param, 0) : print_report_lat_duration(&user_param);
 	}
 
 	if (user_param.output == FULL_VERBOSITY) {

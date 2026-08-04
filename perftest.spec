@@ -1,10 +1,10 @@
 Name:           perftest
 Summary:        IB Performance tests
-Version:        23.07.0
-Release:        0.0
+Version: 25.07.0
+Release: 0.146.gdc31207
 License:        BSD 3-Clause, GPL v2 or later
 Group:          Productivity/Networking/Diagnostic
-Source:         http://www.openfabrics.org/downloads/%{name}-%{version}.tar.gz
+Source: http://www.openfabrics.org/downloads/perftest-25.07.0-0.146.gdc31207.tar.gz
 Url:            http://www.openfabrics.org
 BuildRoot:      %{_tmppath}/%{name}-%{version}-build
 BuildRequires:  libibverbs-devel librdmacm-devel libibumad-devel

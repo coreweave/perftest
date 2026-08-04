@@ -76,6 +76,10 @@
 #define XRC (4)
 #define DC  (5)
 #define SRD (6)
+#ifdef HAVE_MRC
+#define MRC (7)
+#endif
+
 
 /* Genral control definitions */
 #define OFF	     (0)
@@ -123,7 +127,8 @@
 #define DEF_CACHE_LINE_SIZE (64)
 #define DEF_PAGE_SIZE (4096)
 #define DEF_FLOWS (1)
-#define RATE_VALUES_COUNT (18)
+#define DEF_WARM_UP_ITERS (250)
+#define RATE_VALUES_COUNT (22)
 #define DISABLED_CQ_MOD_VALUE    (1)
 #define MSG_SIZE_CQ_MOD_LIMIT (8192)
 
@@ -176,6 +181,7 @@
 #define MAX_INLINE_UD (1024)
 #define MIN_EQ_NUM    (0)
 #define MAX_EQ_NUM    (2048)
+#define MIN_SRQ_UD_RX_DEPTH (100)
 
 /* Raw etherent defines */
 #define RAWETH_MIN_MSG_SIZE	(64)
@@ -191,17 +197,17 @@
 #define CYCLES	"cycles"
 #define USEC	"usec"
 /* The format of the results */
-#define RESULT_FMT		" #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]       BW min[MB/sec]"
+#define RESULT_FMT		" #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]"
 
-#define RESULT_FMT_PER_PORT	" #bytes     #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]   BW Port1[MB/sec]   MsgRate Port1[Mpps]   BW Port2[MB/sec]   MsgRate Port2[Mpps]"
+#define RESULT_FMT_PER_PORT	" #bytes     #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]   BW Port1[MiB/sec]   MsgRate Port1[Mpps]   BW Port2[MiB/sec]   MsgRate Port2[Mpps]"
 
-#define RESULT_FMT_G	" #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]        BW min[Gb/sec]"
+#define RESULT_FMT_G	" #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]"
 
 #define RESULT_FMT_G_PER_PORT	" #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]   BW Port1[Gb/sec]   MsgRate Port1[Mpps]   BW Port2[Gb/sec]   MsgRate Port2[Mpps]"
 
-#define RESULT_FMT_QOS  " #bytes    #sl      #iterations    BW peak[MB/sec]    BW average[MB/sec]   MsgRate[Mpps]   BW min[MB/sec]"
+#define RESULT_FMT_QOS  " #bytes    #sl      #iterations    BW peak[MiB/sec]    BW average[MiB/sec]   MsgRate[Mpps]"
 
-#define RESULT_FMT_G_QOS  " #bytes    #sl      #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]    BW min[Gb/sec]"
+#define RESULT_FMT_G_QOS  " #bytes    #sl      #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]"
 
 #define RESULT_FMT_LAT " #bytes #iterations    t_min[usec]    t_max[usec]  t_typical[usec]    t_avg[usec]    t_stdev[usec]   99""%"" percentile[usec]   99.9""%"" percentile[usec] "
 
@@ -216,35 +222,35 @@
 #define RESULT_FMT_FS_RATE_DUR " #flows		fs_avg_time[usec]    	fps[flow per sec]"
 
 /* Result print format */
-#define REPORT_FMT " %-7lu    %-10" PRIu64 "       %-7.2lf            %-7.2lf		   %-7.6lf		  %-7.2lf"
+#define REPORT_FMT " %-7lu    %-10" PRIu64 "       %-7.2lf            %-7.2lf		     %-7.6lf"
 
-#define REPORT_FMT_JSON "MsgSize: %lu,\nn_iterations: %" PRIu64 ",\nBW_peak: %.2lf,\nBW_average: %.2lf,\nMsgRate: %.6lf,\nBW_min: %.2lf,\n"
+#define REPORT_FMT_JSON "\"MsgSize\": %lu,\n\"n_iterations\": %" PRIu64 ",\n\"BW_peak\": %.2lf,\n\"BW_average\": %.2lf,\n\"MsgRate\": %.6lf"
 
-#define REPORT_FMT_EXT " %-7lu    %" PRIu64 "           %-7.6lf            %-7.6lf            %-7.6lf		  %-7.2lf"
+#define REPORT_FMT_EXT " %-7lu    %" PRIu64 "           %-7.6lf            %-7.6lf            %-7.6lf"
 
-#define REPORT_FMT_EXT_JSON "MsgSize: %lu,\nn_iterations: %" PRIu64 ",\nBW_peak: %.6lf,\nBW_average: %.6lf,\nMsgRate: %.6lf,\nBW_min: %.2lf,\n"
+#define REPORT_FMT_EXT_JSON "\"MsgSize\": %lu,\n\"n_iterations\": %" PRIu64 ",\n\"BW_peak\": %.6lf,\n\"BW_average\": %.6lf,\n\"MsgRate\": %.6lf"
 
 #define REPORT_FMT_PER_PORT     " %-7lu    %-10" PRIu64 "     %-7.2lf            %-7.2lf		   %-7.6lf        %-7.2lf            %-7.6lf              %-7.2lf            %-7.6lf"
 
 #define REPORT_EXT	"\n"
-#define REPORT_EXT_JSON	""
+#define REPORT_EXT_JSON	"\n"
 
 #define REPORT_EXT_CPU_UTIL	"	    %-3.2f\n"
-#define REPORT_EXT_CPU_UTIL_JSON "CPU_util: %.2f,\n"
+#define REPORT_EXT_CPU_UTIL_JSON ",\n\"CPU_util\": %.2f\n"
 
-#define REPORT_FMT_QOS " %-7lu    %d           %lu           %-7.2lf            %-7.2lf                  %-7.6lf	%-7.2lf\n"
+#define REPORT_FMT_QOS " %-7lu    %d           %lu           %-7.2lf            %-7.2lf                  %-7.6lf\n"
 
-#define REPORT_FMT_QOS_JSON "MsgSize: %lu,\nsl: %d,\nn_iterations: %lu,\nBW_peak: %.2lf,\nBW_average: %.2lf,\n MsgRate: %.6lf,\nBW_min: %.2lf,\n"
+#define REPORT_FMT_QOS_JSON "\"MsgSize\": %lu,\nsl: %d,\n\"n_iterations\": %lu,\n\"BW_peak\": %.2lf,\n\"BW_average\": %.2lf,\n \"MsgRate\": %.6lf"
 
 /* Result print format for latency tests. */
 #define REPORT_FMT_LAT " %-7lu %" PRIu64 "          %-7.2f        %-7.2f      %-7.2f  	       %-7.2f     	%-7.2f		%-7.2f 		%-7.2f"
 
-#define REPORT_FMT_LAT_JSON "MsgSize: %lu,\nn_iterations: %" PRIu64 ",\nt_min: %.2f,\nt_max: %.2f,\nt_typical: %.2f,\nt_avg: %.2f,\n\
-t_stdev: %.2f,\npercentile_99: %.2f,\npercentile_99.9: %.2f,\n"
+#define REPORT_FMT_LAT_JSON "\"MsgSize\": %lu,\n\"n_iterations\": %" PRIu64 ",\n\"t_min\": %.2f,\n\"t_max\": %.2f,\n\"t_typical\": %.2f,\n\"t_avg\": %.2f,\n\
+\"t_stdev\": %.2f,\n\"percentile_99\": %.2f,\n\"percentile_99.9\": %.2f"
 
 #define REPORT_FMT_LAT_DUR " %-7lu       %" PRIu64 "            %-7.2f        %-7.2f"
 
-#define REPORT_FMT_LAT_DUR_JSON "MsgSize: %lu,\nn_iterations: %" PRIu64 ",\nt_avg: %.2f,\ntps_average: %.2f,\n"
+#define REPORT_FMT_LAT_DUR_JSON "\"MsgSize\": %lu,\n\"n_iterations\": %" PRIu64 ",\n\"t_avg\": %.2f,\n\"tps_average\": %.2f"
 
 #define REPORT_FMT_FS_RATE "%" PRIu64 "          %-7.2f        		%-7.2f      	%-7.2f  	       		%-7.2f     	%-7.2f"
 
@@ -312,6 +318,7 @@ t_stdev: %.2f,\npercentile_99: %.2f,\npercentile_99.9: %.2f,\n"
 #define MTU_SIZE(mtu_ind) (((uint64_t)1 << (MTU_FIX + mtu_ind)))
 
 #define MAX_VERSION 16	/* Reserve 15 bytes for version numbers */
+#define MRC_WRITE_IMM_FC_VERSION 6.27
 
 #define GET_ARRAY_SIZE(arr) (sizeof((arr)) / sizeof((arr[0])))
 
@@ -323,7 +330,7 @@ t_stdev: %.2f,\npercentile_99: %.2f,\npercentile_99.9: %.2f,\n"
 } while (0)
 
 /* The Verb of the benchmark. */
-typedef enum { SEND , WRITE, READ, ATOMIC } VerbType;
+typedef enum { SEND , WRITE, WRITE_IMM, READ, ATOMIC } VerbType;
 
 /* The type of the test */
 typedef enum { LAT , BW , LAT_BY_BW, FS_RATE } TestType;
@@ -384,7 +391,8 @@ enum ctx_device {
 	ERDMA			= 29,
 	HNS			= 30,
 	CONNECTX8		= 31,
-  INTEL_GEN2		= 32,
+	INTEL_GEN2		= 32,
+	CONNECTX9		= 33,
 };
 
 /* Units for rate limiter */
@@ -440,7 +448,25 @@ enum memory_type {
 	MEMORY_CUDA,
 	MEMORY_ROCM,
 	MEMORY_NEURON,
-	MEMORY_HL
+	MEMORY_HL,
+	MEMORY_MLU,
+	MEMORY_OPENCL
+};
+
+enum cuda_mem_type {
+	CUDA_MEM_DEVICE = 0,
+	CUDA_MEM_MANAGED,
+	CUDA_MEM_HOSTALLOC,
+	CUDA_MEM_HOSTREGISTER,
+	CUDA_MEM_MALLOC,
+	CUDA_MEM_TYPES
+};
+
+enum gpu_touch_type {
+	GPU_NO_TOUCH,
+	GPU_TOUCH_ONCE,
+	GPU_TOUCH_INFINITE,
+	GPU_TOUCH_TYPES
 };
 
 struct perftest_parameters {
@@ -515,6 +541,7 @@ struct perftest_parameters {
 	int				duplex;
 	int				noPeak;
 	int				cq_mod;
+	int				fill_count;
 	int				req_cq_mod;
 	int 				spec;
 	int 				dualport;
@@ -522,6 +549,8 @@ struct perftest_parameters {
 	int 				recv_post_list;
 	int				duration;
 	int 				use_srq;
+	int 				no_lock;
+	int 				congest_type;
 	int				use_xrc;
 	int				use_rss;
 	int				srq_exists;
@@ -550,6 +579,10 @@ struct perftest_parameters {
 	char				rem_version[MAX_VERSION];
 	cycles_t			*tposted;
 	cycles_t			*tcompleted;
+	cycles_t			*tqp_create;
+	cycles_t			*tqp_init;
+	cycles_t			*tqp_rtr;
+	cycles_t			*tqp_rts;
 	int				use_mcg;
 	int 				use_rdma_cm;
 	int				is_reversed;
@@ -566,10 +599,17 @@ struct perftest_parameters {
 	struct memory_ctx		*(*memory_create)(struct perftest_parameters *params);
 	int				cuda_device_id;
 	char				*cuda_device_bus_id;
+	int				cuda_mem_type;
 	int				use_cuda_dmabuf;
+	int				use_data_direct;
 	int				rocm_device_id;
 	int				neuron_core_id;
+	int				use_neuron_dmabuf;
 	char				*hl_device_bus_id;
+	int				mlu_device_id;
+	int                             opencl_platform_id;
+	int                             opencl_device_id;
+	int				gpu_touch;
 	char				*mmap_file;
 	unsigned long			mmap_offset;
 	/* New test params format pilot. will be used in all flags soon,. */
@@ -602,6 +642,7 @@ struct perftest_parameters {
 	int 				dont_xchg_versions;
 	int 				ipv6;
 	int 				raw_ipv6;
+	int 				ai_family;
 	int 				report_per_port;
 	int 				use_odp;
 	int				use_hugepages;
@@ -621,6 +662,7 @@ struct perftest_parameters {
 	int				flows_burst;
 	uint32_t			reply_every;
 	int				perform_warm_up;
+	uint32_t		warm_up_iters;
 	int				use_ooo;
 	int				vlan_en;
 	uint32_t			vlan_pcp;
@@ -630,8 +672,26 @@ struct perftest_parameters {
 	char				*source_ip;
 	int 				has_source_ip;
 	int 			ah_allocated;
-	int             report_min_bw;
-	uint64_t             report_min_bw_cycles;
+	int				use_write_with_imm;
+	int				use_unsolicited_write;
+	int				use_ddp;
+	int				no_ddp;
+	int				connectionless;
+	uint16_t			cqe_poll;
+	int				use_cqe_poll;
+	#ifdef HAVE_MRC
+	int				use_qp_hints;
+	int				cc_init_rate;
+	int				cc_min_rate;
+	int				cc_max_rate;
+	int				mpr_dest;
+	#ifdef HAVE_MRC_EXT_CQ
+	int				ext_mrc_cq;
+	#endif
+	#endif
+	uint32_t			*start_psn_values;
+	int				use_start_psn;
+	int				print_qp_setup_times;
 };
 
 struct report_options {
@@ -651,7 +711,6 @@ struct bw_report_data {
 	double msgRate_avg_p1;
 	double msgRate_avg_p2;
 	int sl;
-	double bw_min;
 };
 
 struct rate_gbps_string {
@@ -668,8 +727,10 @@ static const struct rate_gbps_string RATE_VALUES[RATE_VALUES_COUNT] = {
 	{IBV_RATE_14_GBPS, "14"},
 	{IBV_RATE_20_GBPS, "20"},
 	{IBV_RATE_25_GBPS, "25"},
+	{IBV_RATE_28_GBPS, "28"},
 	{IBV_RATE_30_GBPS, "30"},
 	{IBV_RATE_40_GBPS, "40"},
+	{IBV_RATE_50_GBPS, "50"},
 	{IBV_RATE_56_GBPS, "56"},
 	{IBV_RATE_60_GBPS, "60"},
 	{IBV_RATE_80_GBPS, "80"},
@@ -679,6 +740,8 @@ static const struct rate_gbps_string RATE_VALUES[RATE_VALUES_COUNT] = {
 	{IBV_RATE_168_GBPS, "168"},
 	{IBV_RATE_200_GBPS, "200"},
 	{IBV_RATE_300_GBPS, "300"},
+	{IBV_RATE_400_GBPS, "400"},
+	{IBV_RATE_600_GBPS, "600"},
 	{IBV_RATE_MAX, "MAX"}
 };
 
@@ -794,9 +857,10 @@ void print_full_bw_report (struct perftest_parameters *user_param, struct bw_rep
  * Parameters :
  *
  *   user_param  - the parameters parameters.
+ *   is_warm_up  - flag to indicate if the test is a warm-up test.
  *
  */
-void print_report_lat (struct perftest_parameters *user_param);
+void print_report_lat (struct perftest_parameters *user_param, int is_warm_up);
 
 /* print_report_lat_duration
  *
@@ -820,6 +884,18 @@ void print_report_lat_duration (struct perftest_parameters *user_param);
  *
  */
 void print_report_fs_rate (struct perftest_parameters *user_param);
+
+/* print_qp_setup_times
+ *
+ * Description : print QP creation and state transition timing statistics
+ *
+ * Parameters :
+ *
+ *   user_param  - user_parameters struct for this test.
+ *
+ * Return Value : void
+ */
+void print_qp_setup_times(struct perftest_parameters *user_param);
 
 /* set_mtu
  *

@@ -19,6 +19,9 @@
 #ifdef HAVE_SRD
 #include <infiniband/efadv.h>
 #endif
+#ifdef HAVE_MRC
+#include "perftest_mrc_compat.h"
+#endif
 #if defined(__FreeBSD__)
 #include <ctype.h>
 #endif
@@ -660,56 +663,106 @@ static int get_best_gid_index (struct pingpong_context *ctx,
 /******************************************************************************
  *
  ******************************************************************************/
-static int ethernet_client_connect(struct perftest_comm *comm)
-{
-	struct addrinfo *res, *t;
-	struct addrinfo hints;
-	char *service;
-	struct sockaddr_in source;
+static int set_source_address(struct perftest_comm *comm, struct sockaddr *source, socklen_t *addrlen) {
+    if (comm->rdma_params->ai_family == AF_INET) {
+        struct sockaddr_in *source_ipv4 = (struct sockaddr_in *)source;
+        memset(source_ipv4, 0, sizeof(*source_ipv4));
+        source_ipv4->sin_family = AF_INET;
+        source_ipv4->sin_addr.s_addr = inet_addr(comm->rdma_params->source_ip);
 
-	int sockfd = -1;
-	memset(&hints, 0, sizeof hints);
-	hints.ai_family   = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-
-	if (comm->rdma_params->has_source_ip) {
-		memset(&source, 0, sizeof(source));
-		source.sin_family = AF_INET;
-		source.sin_addr.s_addr = inet_addr(comm->rdma_params->source_ip);
-	}
-
-	if (check_add_port(&service,comm->rdma_params->port,comm->rdma_params->servername,&hints,&res)) {
-		fprintf(stderr, "Problem in resolving basic address and port\n");
-		return 1;
-	}
-
-	for (t = res; t; t = t->ai_next) {
-		sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
-		if (sockfd >= 0) {
-			if (comm->rdma_params->has_source_ip) {
-				if (bind(sockfd, (struct sockaddr *)&source, sizeof(source)) < 0)
-				{
-					fprintf(stderr, "Failed to bind socket\n");
-					close(sockfd);
-					return 1;
-				}
-			}
-			if (!connect(sockfd, t->ai_addr, t->ai_addrlen))
-				break;
-			close(sockfd);
-			sockfd = -1;
+		if (source_ipv4->sin_addr.s_addr < 0) {
+			fprintf(stderr, "Invalid source address.\n");
+			return 1;
 		}
-	}
 
-	freeaddrinfo(res);
+        *addrlen = sizeof(*source_ipv4);
+        return 0;
 
-	if (sockfd < 0) {
-		fprintf(stderr, "Couldn't connect to %s:%d\n",comm->rdma_params->servername,comm->rdma_params->port);
-		return 1;
-	}
+    } else if (comm->rdma_params->ai_family == AF_INET6) {
+        struct sockaddr_in6 *source_ipv6 = (struct sockaddr_in6 *)source;
+        memset(source_ipv6, 0, sizeof(*source_ipv6));
+        source_ipv6->sin6_family = AF_INET6;
 
-	comm->rdma_params->sockfd = sockfd;
-	return 0;
+        if (inet_pton(AF_INET6, comm->rdma_params->source_ip, &source_ipv6->sin6_addr) != 1) {
+            fprintf(stderr, "Invalid IPv6 source address.\n");
+            return 1;
+        }
+
+        *addrlen = sizeof(*source_ipv6);
+        return 0;
+    }
+
+    fprintf(stderr, "Unsupported address family for source IP.\n");
+    return 1;
+}
+
+/******************************************************************************
+ *
+ ******************************************************************************/
+static int ethernet_client_connect(struct perftest_comm *comm) {
+    struct addrinfo *res, *t;
+    struct addrinfo hints;
+    char *service;
+    struct sockaddr *source = NULL;
+    socklen_t addrlen = 0;
+    int sockfd = -1;
+
+    memset(&hints, 0, sizeof hints);
+    hints.ai_family   = comm->rdma_params->ai_family;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if (comm->rdma_params->has_source_ip) {
+        source = malloc(sizeof(struct sockaddr_storage));
+
+        if (!source) {
+            fprintf(stderr, "Failed to allocate memory for source address.\n");
+            return 1;
+        }
+
+		memset(source, 0, sizeof(struct sockaddr_storage));
+
+        if (set_source_address(comm, source, &addrlen)) {
+            free(source);
+            fprintf(stderr, "Failed to set source address.\n");
+            return 1;
+        }
+    }
+
+    if (check_add_port(&service, comm->rdma_params->port, comm->rdma_params->servername, &hints, &res)) {
+        fprintf(stderr, "Problem in resolving basic address and port\n");
+        if (source) free(source);
+        return 1;
+    }
+
+    for (t = res; t; t = t->ai_next) {
+        sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
+        if (sockfd >= 0) {
+            if (comm->rdma_params->has_source_ip) {
+                if (bind(sockfd, source, addrlen) < 0) {
+                    fprintf(stderr, "Failed to bind socket\n");
+                    close(sockfd);
+                    sockfd = -1;
+                    break;
+                }
+            }
+            if (!connect(sockfd, t->ai_addr, t->ai_addrlen))
+                break;
+            close(sockfd);
+            sockfd = -1;
+        }
+    }
+
+    freeaddrinfo(res);
+
+    if (source) free(source);
+
+    if (sockfd < 0) {
+        fprintf(stderr, "Couldn't connect to %s:%d\n", comm->rdma_params->servername, comm->rdma_params->port);
+        return 1;
+    }
+
+    comm->rdma_params->sockfd = sockfd;
+    return 0;
 }
 
 /******************************************************************************
@@ -726,7 +779,7 @@ static int ethernet_server_connect(struct perftest_comm *comm)
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_flags    = AI_PASSIVE;
-	hints.ai_family   = AF_INET;
+	hints.ai_family   = comm->rdma_params->ai_family;
 	hints.ai_socktype = SOCK_STREAM;
 
 	if (check_add_port(&service,comm->rdma_params->port,src_ip,&hints,&res))
@@ -736,6 +789,9 @@ static int ethernet_server_connect(struct perftest_comm *comm)
 	}
 
 	for (t = res; t; t = t->ai_next) {
+		if (t->ai_family != comm->rdma_params->ai_family)
+			continue;
+
 		sockfd = socket(t->ai_family, t->ai_socktype, t->ai_protocol);
 
 		if (sockfd >= 0) {
@@ -777,6 +833,7 @@ int set_up_connection(struct pingpong_context *ctx,
 {
 	int num_of_qps = user_param->num_of_qps;
 	int num_of_qps_per_port = user_param->num_of_qps / 2;
+	uint32_t qpn;
 	int i;
 	union ibv_gid temp_gid;
 	union ibv_gid temp_gid2;
@@ -849,9 +906,21 @@ int set_up_connection(struct pingpong_context *ctx,
 			my_dest[i].gid_index = user_param->gid_index;
 		}
 
-		my_dest[i].qpn   = ctx->qp[i]->qp_num;
-		my_dest[i].psn   = lrand48() & 0xffffff;
-		my_dest[i].rkey  = ctx->mr[i]->rkey;
+		#ifdef HAVE_MRC
+		if (user_param->connection_type == MRC) {
+			mrc_get_qpn(ctx->mrc_work_qp[i], &qpn);
+		}
+		else
+		#endif
+		qpn = ctx->qp[i]->qp_num;
+		my_dest[i].qpn   = qpn;
+		/* Use user-provided PSN if specified, otherwise use random PSN */
+		if (user_param->use_start_psn) {
+			my_dest[i].psn = user_param->start_psn_values[i];
+		} else {
+			my_dest[i].psn = lrand48() & 0xffffff;
+		}
+		my_dest[i].rkey = user_param->use_null_mr ? ctx->null_mr->lkey : ctx->mr[i]->rkey;
 
 		/* Each qp gives his receive buffer address.*/
 		my_dest[i].out_reads = user_param->out_reads;
@@ -905,8 +974,8 @@ int set_up_connection(struct pingpong_context *ctx,
 int rdma_client_connect(struct pingpong_context *ctx,struct perftest_parameters *user_param)
 {
 	char *service;
-	int temp,num_of_retry= NUM_OF_RETRIES;
-	struct sockaddr_in sin, source_sin;
+	int temp, num_of_retry = NUM_OF_RETRIES;
+	struct sockaddr_storage sin, source_sin;
 	struct sockaddr *source_ptr = NULL;
 	struct addrinfo *res;
 	struct rdma_cm_event *event;
@@ -914,7 +983,7 @@ int rdma_client_connect(struct pingpong_context *ctx,struct perftest_parameters 
 	struct addrinfo hints;
 
 	memset(&hints, 0, sizeof hints);
-	hints.ai_family   = AF_INET;
+	hints.ai_family   = user_param->ai_family;
 	hints.ai_socktype = SOCK_STREAM;
 
 	if (check_add_port(&service,user_param->port,user_param->servername,&hints,&res)) {
@@ -922,13 +991,19 @@ int rdma_client_connect(struct pingpong_context *ctx,struct perftest_parameters 
 		return FAILURE;
 	}
 
-	if (res->ai_family != PF_INET) {
+	if (res->ai_family != user_param->ai_family) {
 		freeaddrinfo(res);
 		return FAILURE;
 	}
-	memcpy(&sin, res->ai_addr, sizeof(sin));
+
+	if (res->ai_addr->sa_family == AF_INET) {
+		memcpy(&sin, res->ai_addr, sizeof(struct sockaddr_in));
+	}
+	else {
+		memcpy(&sin, res->ai_addr, sizeof(struct sockaddr_in6));
+	}
+	sockaddr_set_port((struct sockaddr *)&sin, (unsigned short)user_param->port);
 	freeaddrinfo(res);
-	sin.sin_port = htons((unsigned short)user_param->port);
 
 	if (user_param->has_source_ip) {
 		if (check_add_port(&service, 0x0, user_param->source_ip, &hints, &res))
@@ -938,7 +1013,12 @@ int rdma_client_connect(struct pingpong_context *ctx,struct perftest_parameters 
 		}
 		memset(&source_sin, 0x0, sizeof(source_sin));
 		//coverity[deref_after_free]
-		memcpy(&source_sin, res->ai_addr, sizeof(source_sin));
+		if (res->ai_addr->sa_family == AF_INET) {
+			memcpy(&source_sin, res->ai_addr, sizeof(struct sockaddr_in));
+		}
+		else {
+			memcpy(&source_sin, res->ai_addr, sizeof(struct sockaddr_in6));
+		}
 		source_ptr = (struct sockaddr *)&source_sin;
 		freeaddrinfo(res);
 	}
@@ -983,6 +1063,12 @@ int rdma_client_connect(struct pingpong_context *ctx,struct perftest_parameters 
 			fprintf(stderr, " Set TOS option failed: %d\n",event->event);
 			return FAILURE;
 		}
+	}
+
+	if (rdma_set_option(ctx->cm_id, RDMA_OPTION_ID, RDMA_OPTION_ID_ACK_TIMEOUT,
+			    &user_param->qp_timeout, sizeof(uint8_t))) {
+		fprintf(stderr, " Set RDMA-CM Ack timeout option failed: %d\n", event->event);
+		return FAILURE;
 	}
 
 	while (1) {
@@ -1124,15 +1210,13 @@ int rdma_server_connect(struct pingpong_context *ctx,
 	struct rdma_conn_param conn_param;
 	struct addrinfo hints;
 	char *service;
-	struct sockaddr_in sin;
+	struct sockaddr_storage sin;
 	char* src_ip = user_param->has_source_ip ? user_param->source_ip : NULL;
 
 	memset(&hints, 0, sizeof hints);
 	hints.ai_flags    = AI_PASSIVE;
-	hints.ai_family   = AF_INET;
+	hints.ai_family   = user_param->ai_family;
 	hints.ai_socktype = SOCK_STREAM;
-
-        memset(&sin, 0x0, sizeof(sin));
 
 	if (check_add_port(&service,user_param->port,src_ip,&hints,&res))
 	{
@@ -1140,15 +1224,22 @@ int rdma_server_connect(struct pingpong_context *ctx,
 		return FAILURE;
 	}
 
-	if (res->ai_family != PF_INET) {
+	if (res->ai_family != user_param->ai_family) {
 		freeaddrinfo(res);
 		return FAILURE;
 	}
-	memcpy(&sin, res->ai_addr, sizeof(sin));
-	sin.sin_port = htons((unsigned short)user_param->port);
+
+	if (res->ai_addr->sa_family == AF_INET) {
+		memcpy(&sin, res->ai_addr, sizeof(struct sockaddr_in));
+	}
+	else {
+		memcpy(&sin, res->ai_addr, sizeof(struct sockaddr_in6));
+	}
+
+	sockaddr_set_port((struct sockaddr *)&sin, (unsigned short)user_param->port);
 	freeaddrinfo(res);
 
-	if (rdma_bind_addr(ctx->cm_id_control,(struct sockaddr *)&sin)) {
+	if (rdma_bind_addr(ctx->cm_id_control, (struct sockaddr *)&sin)) {
 		fprintf(stderr," rdma_bind_addr failed\n");
 		return 1;
 	}
@@ -1213,6 +1304,12 @@ int rdma_server_connect(struct pingpong_context *ctx,
 		}
 	}
 
+	if (rdma_set_option(ctx->cm_id, RDMA_OPTION_ID, RDMA_OPTION_ID_ACK_TIMEOUT,
+			    &user_param->qp_timeout, sizeof(uint8_t))) {
+		fprintf(stderr, " Set RDMA-CM Ack timeout option failed: %d\n", event->event);
+		return FAILURE;
+	}
+
 	if (rdma_accept(ctx->cm_id, &conn_param)) {
 		fprintf(stderr, "Function rdma_accept failed\n");
 		return 1;
@@ -1243,6 +1340,7 @@ int create_comm_struct(struct perftest_comm *comm,
 	memset(comm->rdma_params, 0, sizeof(struct perftest_parameters));
 
 	comm->rdma_params->port		   	= user_param->port;
+	comm->rdma_params->ai_family	   	= user_param->ai_family;
 	comm->rdma_params->sockfd      		= -1;
 	comm->rdma_params->gid_index   		= user_param->gid_index;
 	comm->rdma_params->gid_index2 		= user_param->gid_index2;
@@ -1259,6 +1357,7 @@ int create_comm_struct(struct perftest_comm *comm,
 	comm->rdma_params->output      		= user_param->output;
 	comm->rdma_params->report_per_port 	= user_param->report_per_port;
 	comm->rdma_params->retry_count		= user_param->retry_count;
+	comm->rdma_params->qp_timeout		= user_param->qp_timeout;
 	comm->rdma_params->mr_per_qp		= user_param->mr_per_qp;
 	comm->rdma_params->dlid			= user_param->dlid;
 	comm->rdma_params->cycle_buffer         = user_param->cycle_buffer;
@@ -1389,7 +1488,7 @@ int establish_connection(struct perftest_comm *comm)
 		ptr = comm->rdma_params->servername ? &ethernet_client_connect : &ethernet_server_connect;
 
 		if ((*ptr)(comm)) {
-			fprintf(stderr,"Unable to open file descriptor for socket connection");
+			fprintf(stderr,"Unable to open file descriptor for socket connection\n");
 			return 1;
 		}
 	}
@@ -1633,6 +1732,42 @@ int ctx_xchg_data( struct perftest_comm *comm,
 	return 0;
 }
 
+#ifdef HAVE_MRC
+int mrc_fc_exchange(struct pingpong_context *ctx,
+		struct perftest_parameters *user_param,
+		struct perftest_comm *user_comm)
+{
+	int i;
+
+	if (!ctx->mrc_fc.enabled)
+		return SUCCESS;
+
+	if (ctx_xchg_data(user_comm, &ctx->mrc_fc.qp_my_dest,
+			  &ctx->mrc_fc.qp_rem_dest,
+			  sizeof(struct pingpong_dest))) {
+		fprintf(stderr, "Failed to exchange MRC WriteImm flow-control QP data\n");
+		return FAILURE;
+	}
+
+	printf("%sMRC control QP: local QPN %#06x remote QPN %#06x\n",
+			user_param->output == FULL_VERBOSITY ? " " : "",
+			ctx->mrc_fc.qp_my_dest.qpn,
+			ctx->mrc_fc.qp_rem_dest.qpn);
+
+	for (i = 0; i < user_param->num_of_qps; i++) {
+		if (ctx_xchg_data(user_comm, &ctx->mrc_fc.qp_state[i].my_dest,
+				  &ctx->mrc_fc.qp_state[i].rem_dest,
+				  sizeof(struct mrc_fc_dest))) {
+			fprintf(stderr, "Failed to exchange MRC WriteImm flow-control data\n");
+			return FAILURE;
+		}
+	}
+
+	mrc_fc_reset_state(ctx, user_param);
+	return mrc_fc_activate_control_qp(ctx, user_param);
+}
+#endif
+
 /******************************************************************************
  *
  ******************************************************************************/
@@ -1656,7 +1791,6 @@ void xchg_bw_reports (struct perftest_comm *comm, struct bw_report_data *my_bw_r
 	temp.msgRate_avg = hton_double(my_bw_rep->msgRate_avg);
 	temp.msgRate_avg_p1 = hton_double(my_bw_rep->msgRate_avg_p1);
 	temp.msgRate_avg_p2 = hton_double(my_bw_rep->msgRate_avg_p2);
-	temp.bw_min = hton_double(my_bw_rep->bw_min);
 
 	/*******************Exchange Reports*******************/
 	if (ctx_xchg_data(comm, (void*) (&temp.size), (void*) (&rem_bw_rep->size), sizeof(unsigned long))) {
@@ -1702,11 +1836,6 @@ void xchg_bw_reports (struct perftest_comm *comm, struct bw_report_data *my_bw_r
 			exit(1);
 		}
 	}
-	if (ctx_xchg_data(comm, (void*) (&temp.bw_min), (void*) (&rem_bw_rep->bw_min), sizeof(double))) {
-		fprintf(stderr," Failed to exchange data between server and clients\n");
-		exit(1);
-	}
-
 	// cppcheck-suppress selfAssignment
 	rem_bw_rep->size = hton_long(rem_bw_rep->size);
 
@@ -1731,8 +1860,6 @@ void xchg_bw_reports (struct perftest_comm *comm, struct bw_report_data *my_bw_r
 	rem_bw_rep->msgRate_avg_p1 = hton_double(rem_bw_rep->msgRate_avg_p1);
 	// cppcheck-suppress selfAssignment
 	rem_bw_rep->msgRate_avg_p2 = hton_double(rem_bw_rep->msgRate_avg_p2);
-	// cppcheck-suppress selfAssignment
-	rem_bw_rep->bw_min = hton_double(rem_bw_rep->bw_min);
 
 }
 
@@ -1798,13 +1925,6 @@ int ctx_close_connection(struct perftest_comm *comm,
 	}
 
 	if (!comm->rdma_params->use_rdma_cm && !comm->rdma_params->work_rdma_cm) {
-
-		if (write(comm->rdma_params->sockfd,"done",sizeof "done") != sizeof "done") {
-			perror(" Client write");
-			fprintf(stderr,"Couldn't write to socket\n");
-			return -1;
-		}
-
 		close(comm->rdma_params->sockfd);
 		return 0;
 	}
@@ -1835,6 +1955,17 @@ void check_version_compatibility(struct perftest_parameters *user_param)
 		fprintf(stderr, "Current implementation is not compatible with versions older than 5.70\n");
 		exit(1);
 	}
+
+	#ifdef HAVE_MRC
+	if (user_param->connection_type == MRC &&
+	    user_param->verb == WRITE_IMM &&
+	    atof(user_param->rem_version) < MRC_WRITE_IMM_FC_VERSION) {
+		fprintf(stderr,
+			"MRC WriteImm requires flow-control support; peer version %s is too old\n",
+			user_param->rem_version);
+		exit(1);
+	}
+	#endif
 }
 
 /******************************************************************************
@@ -2042,7 +2173,7 @@ int rdma_cm_get_rdma_address(struct perftest_parameters *user_param,
 	char port[6] = "", error_message[ERROR_MSG_SIZE] = "";
 
 	sprintf(port, "%d", user_param->port);
-	hints->ai_family = AF_INET;
+	hints->ai_family = user_param->ai_family;
 	// if we have servername specified, it is a client, we should use server name
 	// if it is not specified, we should use explicit source_ip if possible
 	if ((NULL != user_param->servername) || (!user_param->has_source_ip)) {
@@ -2311,6 +2442,16 @@ int rdma_cm_address_handler(struct pingpong_context *ctx,
 		}
 	}
 
+	if (user_param->connection_type == RC) {
+		rc = rdma_set_option(cma_id, RDMA_OPTION_ID, RDMA_OPTION_ID_ACK_TIMEOUT,
+					&user_param->qp_timeout, sizeof(uint8_t));
+		if (rc) {
+			error_message = "Failed to set qp_timeout.";
+			rdma_cm_connect_error(ctx);
+			goto error;
+		}
+	}
+
 	rc = rdma_resolve_route(cma_id, 2000);
 	if (rc) {
 		error_message = "Failed to resolve RDMA CM route.";
@@ -2444,6 +2585,16 @@ int rdma_cm_connection_request_handler(struct pingpong_context *ctx,
 		error_message = \
 			"Failed request UD connection parameters for RDMA CM.";
 		goto error_2;
+	}
+
+	if (user_param->connection_type == RC) {
+		rc = rdma_set_option(ctx->cm_id, RDMA_OPTION_ID,
+					RDMA_OPTION_ID_ACK_TIMEOUT,
+					&user_param->qp_timeout, sizeof(uint8_t));
+		if (rc) {
+			error_message = "Failed to set qp_timeout.";
+			goto error_2;
+		}
 	}
 
 	rc = rdma_accept(ctx->cm_id, &conn_param);
@@ -2628,10 +2779,12 @@ int rdma_cm_disconnect_nodes(struct pingpong_context *ctx,
 		}
 
 		ctx->cma_master.nodes[i].connected = 0;
-		rc = rdma_disconnect(ctx->cma_master.nodes[i].cma_id);
-		if (rc) {
-			error_message = "Failed to disconnect RDMA CM connection.";
-			goto error;
+		if (user_param->machine == SERVER) {
+			rc = rdma_disconnect(ctx->cma_master.nodes[i].cma_id);
+			if (rc) {
+				error_message = "Failed to disconnect RDMA CM connection.";
+				goto error;
+			}
 		}
 	}
 	while (ctx->cma_master.disconnects_left) {
