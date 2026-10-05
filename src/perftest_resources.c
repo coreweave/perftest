@@ -4481,6 +4481,8 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 	}
 
 	uint64_t    batch_ccnt = 0;
+	int         min_bw_sampling = 0;   /* inside the steady-state window */
+	int         min_bw_seen = 0;       /* at least one interval has closed */
 	#ifdef HAVE_IBV_WR_API
 	if (user_param->connection_type != RawEth)
 		ctx_post_send_work_request_func_pointer(ctx, user_param);
@@ -4515,8 +4517,18 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 	if (user_param->test_type == ITERATIONS && user_param->noPeak == ON)
 		user_param->tposted[0] = get_cycles();
 
-	if(user_param->report_min_bw)
+	if(user_param->report_min_bw) {
+		/* ms -> cycles. cpu_mhz is cycles per microsecond, as used by the rate
+		 * limiter below. */
+		int min_bw_mhz = get_cpu_mhz(user_param->cpu_freq_f);
+		if (min_bw_mhz <= 0) {
+			fprintf(stderr, "Failed to get CPU frequency for --report-min-bw\n");
+			return FAILURE;
+		}
+		user_param->report_min_bw_interval_cycles =
+			(uint64_t)min_bw_mhz * 1000ULL * (uint64_t)user_param->report_min_bw;
 		batch_start = get_cycles();
+	}
 
 	/* If using rate limiter, calculate gap time between bursts */
 	if (user_param->rate_limit_type == SW_RATE_LIMIT ) {
@@ -4690,13 +4702,41 @@ int run_iter_bw(struct pingpong_context *ctx,struct perftest_parameters *user_pa
 					}
 
 		}
+		/* Minimum bandwidth over fixed TIME intervals (GPUINF-1287). Keep the
+		 * interval whose rate was lowest; comparing msgs/elapsed by
+		 * cross-multiplication avoids a division in the loop and is exact even
+		 * though intervals close a tick past the deadline.
+		 *
+		 * Only the steady-state window is sampled. This loop also runs during
+		 * ramp-up and the end margin, and the previous count-based code folded
+		 * those in -- since it kept the SLOWEST window and ramp-up is reliably
+		 * the slowest period, the reported minimum was largely a warm-up
+		 * measurement. */
 		if(user_param->report_min_bw) {
-			if (totccnt >= (user_param->report_min_bw + batch_ccnt) && totscnt >= user_param->report_min_bw) {
-				cycles_t batch_duration = get_cycles() - batch_start;
+			int sampling = (user_param->test_type != DURATION ||
+			                user_param->state == SAMPLE_STATE);
+			if (sampling && !min_bw_sampling) {
+				/* entering the steady window: start the first interval here so
+				 * it does not span the ramp */
 				batch_start = get_cycles();
 				batch_ccnt = totccnt;
-				if(batch_duration > user_param->report_min_bw_cycles) {
-					user_param->report_min_bw_cycles = batch_duration;
+				min_bw_sampling = 1;
+			} else if (!sampling) {
+				min_bw_sampling = 0;
+			} else {
+				cycles_t now = get_cycles();
+				cycles_t elapsed = now - batch_start;
+				if (elapsed >= user_param->report_min_bw_interval_cycles) {
+					uint64_t msgs = totccnt - batch_ccnt;
+					if (!min_bw_seen ||
+					    msgs * user_param->report_min_bw_cycles <
+					    user_param->report_min_bw_msgs * (uint64_t)elapsed) {
+						user_param->report_min_bw_msgs = msgs;
+						user_param->report_min_bw_cycles = elapsed;
+					}
+					min_bw_seen = 1;
+					batch_start = now;
+					batch_ccnt = totccnt;
 				}
 			}
 		}
