@@ -40,6 +40,7 @@
 #include <string.h>
 #include <time.h>     /* FMT-1267: wall-clock budget for the agent OOB connect retry */
 #include <unistd.h>   /* usleep */
+#include <math.h>     /* GPUINF-2331: isfinite() guard on the agent's JSON doubles */
 
 #include "perftest_parameters.h"
 #include "perftest_resources.h"
@@ -52,6 +53,19 @@
  * (ibv_reg_mr is NOT called again). Mirrors the initial connect sequence in
  * main(); plain RC path only (no DC/XRC/event special-casing for the spike). */
 static int g_agent_fd = 3;
+
+/* JSON has no literal for a non-finite double, and printf renders them as the
+ * bare tokens "inf"/"-inf"/"nan" -- which a strict parser rejects, taking the
+ * whole result line with it. A degenerate run (no completions in a sampling
+ * window, zero elapsed cycles) can divide by zero and produce exactly that, so
+ * the orchestrator loses a measurement it already had and evicts a live rail
+ * (GPUINF-2331). Coerce to 0 at the wire so a bad number degrades one field
+ * instead of the message. Callers should still avoid generating non-finite
+ * values; this is the backstop, not the fix. */
+static double json_finite(double v)
+{
+	return isfinite(v) ? v : 0.0;
+}
 
 static int reestablish_qp(struct pingpong_context *ctx,
 			  struct perftest_parameters *user_param,
@@ -197,7 +211,9 @@ static void agent_repl(struct pingpong_context *ctx, struct perftest_parameters 
 		}
 		if (user_param->machine == CLIENT)
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"client\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",
-				jid, (unsigned long)my_bw_rep->size, my_bw_rep->bw_peak, my_bw_rep->bw_avg, my_bw_rep->bw_min, my_bw_rep->msgRate_avg);
+				jid, (unsigned long)my_bw_rep->size, json_finite(my_bw_rep->bw_peak),
+				json_finite(my_bw_rep->bw_avg), json_finite(my_bw_rep->bw_min),
+				json_finite(my_bw_rep->msgRate_avg));
 		else
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"server\",\"status\":\"ok\"}\n", jid);
 	}
@@ -667,7 +683,9 @@ int main(int argc, char *argv[])
 		if (getenv("PERFTEST_AGENT")) {
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":0,\"role\":\"%s\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",
 				user_param.machine == CLIENT ? "client" : "server",
-				(unsigned long)my_bw_rep.size, my_bw_rep.bw_peak, my_bw_rep.bw_avg, my_bw_rep.bw_min, my_bw_rep.msgRate_avg);
+				(unsigned long)my_bw_rep.size, json_finite(my_bw_rep.bw_peak),
+				json_finite(my_bw_rep.bw_avg), json_finite(my_bw_rep.bw_min),
+				json_finite(my_bw_rep.msgRate_avg));
 		}
 
 		/* run_job stdin REPL (FMT-1267): in PERFTEST_AGENT mode, read JSON job
@@ -693,7 +711,9 @@ int main(int argc, char *argv[])
 				}
 				dprintf(g_agent_fd, "{\"v\":1,\"type\":\"result\",\"id\":%ld,\"role\":\"%s\",\"status\":\"ok\",\"verb\":\"write_bw\",\"size\":%lu,\"measurement\":{\"bw_peak_gbps\":%.2f,\"bw_avg_gbps\":%.2f,\"bw_min_gbps\":%.2f,\"msg_rate_mpps\":%.6f}}\n",
 					jid, user_param.machine == CLIENT ? "client" : "server",
-					(unsigned long)my_bw_rep.size, my_bw_rep.bw_peak, my_bw_rep.bw_avg, my_bw_rep.bw_min, my_bw_rep.msgRate_avg);
+					(unsigned long)my_bw_rep.size, json_finite(my_bw_rep.bw_peak),
+					json_finite(my_bw_rep.bw_avg), json_finite(my_bw_rep.bw_min),
+					json_finite(my_bw_rep.msgRate_avg));
 			}
 			dprintf(g_agent_fd, "{\"v\":1,\"type\":\"bye\"}\n");
 		} else {

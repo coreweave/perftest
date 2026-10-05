@@ -4722,7 +4722,14 @@ void print_report_bw (struct perftest_parameters *user_param, struct bw_report_d
 	my_bw_rep->msgRate_avg_p2 = msgRate_avg_p2;
 	my_bw_rep->sl = user_param->sl;
 
-	if(user_param->report_min_bw) {
+	/* report_min_bw_cycles stays 0 when no batch of report_min_bw completions
+	 * ever finished -- a link slow enough that the run never fills one window.
+	 * Dividing by it yields +inf, which "%.2f" renders as the bare token "inf".
+	 * That is not valid JSON, so the agent's result line is unparseable and the
+	 * orchestrator evicts a rail that is alive and measuring (GPUINF-2331).
+	 * No window measured means no minimum -- report 0, as the branch below
+	 * already does when a minimum was never asked for. */
+	if(user_param->report_min_bw && user_param->report_min_bw_cycles) {
 		my_bw_rep->bw_min = ((double)tsize*user_param->report_min_bw*cycles_to_units) / (user_param->report_min_bw_cycles * format_factor);
 	} else {
 		my_bw_rep->bw_min = 0;
