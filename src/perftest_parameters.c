@@ -1078,6 +1078,9 @@ static void init_perftest_params(struct perftest_parameters *user_param)
 	user_param->vlan_pcp		= 1;
 	user_param->print_eth_func 	= &print_ethernet_header;
 	user_param->report_min_bw   = 0;
+	user_param->report_min_bw_cycles = 0;
+	user_param->report_min_bw_msgs = 0;
+	user_param->report_min_bw_interval_cycles = 0;
 
 	if (user_param->tst == LAT) {
 		user_param->r_flag->unsorted	= OFF;
@@ -2426,6 +2429,17 @@ static void force_dependecies(struct perftest_parameters *user_param)
 	if (user_param->report_min_bw > 0) {
 		if (user_param->tst != BW) {
 			printf(" Sample minimum bandwidth only supports BW tests.\n");
+			exit (1);
+		}
+		/* The value is a sampling interval in MILLISECONDS. It used to be a
+		 * message count, so reject a stale count loudly here rather than
+		 * silently sampling once or not at all (GPUINF-1287). */
+		if (user_param->test_type == DURATION &&
+		    user_param->report_min_bw >= user_param->duration * 1000) {
+			printf(" --report-min-bw is a sampling interval in ms (%d) and must be"
+			       " shorter than the test duration (%d s = %d ms).\n",
+			       user_param->report_min_bw, user_param->duration,
+			       user_param->duration * 1000);
 			exit (1);
 		}
 	}
@@ -3948,7 +3962,7 @@ int parser(struct perftest_parameters *user_param,char *argv[], int argc)
 					recv_post_list_flag = 0;
 				}
 				if (report_min_bw_flag) {
-					CHECK_VALUE(user_param->report_min_bw,int,"report min bandwidth interval",not_int_ptr);
+					CHECK_VALUE(user_param->report_min_bw,int,"report min bandwidth sampling interval in ms",not_int_ptr);
 					report_min_bw_flag = 0;
 				}
 				#ifdef HAVE_AES_XTS
@@ -4729,8 +4743,11 @@ void print_report_bw (struct perftest_parameters *user_param, struct bw_report_d
 	 * orchestrator evicts a rail that is alive and measuring (GPUINF-2331).
 	 * No window measured means no minimum -- report 0, as the branch below
 	 * already does when a minimum was never asked for. */
+	/* Worst sampled interval: the messages that landed in it over its elapsed
+	 * time. The denominator is a chosen constant (~the interval), so unlike the
+	 * old count-based window it can never be zero (GPUINF-1287/GPUINF-2331). */
 	if(user_param->report_min_bw && user_param->report_min_bw_cycles) {
-		my_bw_rep->bw_min = ((double)tsize*user_param->report_min_bw*cycles_to_units) / (user_param->report_min_bw_cycles * format_factor);
+		my_bw_rep->bw_min = ((double)tsize*user_param->report_min_bw_msgs*cycles_to_units) / (user_param->report_min_bw_cycles * format_factor);
 	} else {
 		my_bw_rep->bw_min = 0;
 	}

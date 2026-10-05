@@ -709,8 +709,15 @@ struct perftest_parameters {
 	cpu_set_t			cpu_affinity;     /* CPU mask for affinity */
 	int				numa_node;
 	int				disable_numa;
-	int             report_min_bw;
-	uint64_t             report_min_bw_cycles;
+	/* Minimum-bandwidth sampling. The window is a fixed TIME interval, not a
+	 * fixed message count: a count-based window makes the number of samples
+	 * depend on the bandwidth being measured, so statistical power collapses
+	 * exactly as a link degrades, and below window*size/duration no window
+	 * closes at all (GPUINF-1287). */
+	int             report_min_bw;                 /* sampling interval, MILLISECONDS (0 = off) */
+	uint64_t             report_min_bw_cycles;     /* elapsed cycles of the WORST interval */
+	uint64_t             report_min_bw_msgs;       /* messages completed in that worst interval */
+	uint64_t             report_min_bw_interval_cycles; /* the interval itself, in cycles */
 };
 
 struct report_options {
